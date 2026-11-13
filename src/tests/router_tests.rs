@@ -50,7 +50,7 @@ async fn body_json(response: axum::response::Response) -> Value {
 #[tokio::test]
 async fn health_route_runs_through_combined_tower_stack() {
     let response = test_app(false)
-        .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+        .oneshot(Request::builder().uri("/api/health").body(Body::empty()).unwrap())
         .await
         .unwrap();
 
@@ -69,11 +69,11 @@ async fn openapi_and_swagger_ui_routes_are_available() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let body = String::from_utf8(body.to_vec()).unwrap();
-    assert!(body.contains("\"/items\""));
-    assert!(body.contains("\"/items/bulk-delete\""));
-    assert!(body.contains("\"/health\""));
+    let document = body_json(response).await;
+    assert_eq!(document["servers"][0]["url"], "/api");
+    for path in ["/items", "/items/bulk-delete", "/items/{id}", "/health"] {
+        assert!(document["paths"].get(path).is_some());
+    }
 
     let response = app
         .clone()
@@ -109,6 +109,18 @@ async fn swagger_routes_are_unavailable_when_debug_is_disabled() {
 }
 
 #[tokio::test]
+async fn api_routes_require_api_prefix() {
+    let app = test_app(false);
+
+    for uri in ["/health", "/items", "/api/api/health"] {
+        assert_eq!(
+            request(&app, "GET", uri, None).await.status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+}
+
+#[tokio::test]
 async fn item_update_delete_and_bulk_delete_routes_are_available() {
     let id = Uuid::new_v4();
     let app = test_app(false);
@@ -118,7 +130,7 @@ async fn item_update_delete_and_bulk_delete_routes_are_available() {
         .oneshot(
             Request::builder()
                 .method("PATCH")
-                .uri(format!("/items/{id}"))
+                .uri(format!("/api/items/{id}"))
                 .header("content-type", "application/json")
                 .body(Body::from(r#"{"title":"updated"}"#))
                 .unwrap(),
@@ -132,7 +144,7 @@ async fn item_update_delete_and_bulk_delete_routes_are_available() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/items/{id}"))
+                .uri(format!("/api/items/{id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -144,7 +156,7 @@ async fn item_update_delete_and_bulk_delete_routes_are_available() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/items/bulk-delete")
+                .uri("/api/items/bulk-delete")
                 .header("content-type", "application/json")
                 .body(Body::from(
                     r#"{"ids":["a2eee96f-f875-4e4e-aeee-6718d610a796"]}"#,
@@ -159,20 +171,26 @@ async fn item_update_delete_and_bulk_delete_routes_are_available() {
 #[tokio::test]
 async fn rest_crud_preserves_identity_and_rejected_updates() {
     let app = test_app(false);
-    let created = request(&app, "POST", "/items", Some(json!({"title": "  first  "}))).await;
+    let created = request(
+        &app,
+        "POST",
+        "/api/items",
+        Some(json!({"title": "  first  "})),
+    )
+    .await;
     assert_eq!(created.status(), StatusCode::CREATED);
     let item = body_json(created).await;
     let id = item["id"].as_str().unwrap();
     Uuid::parse_str(id).unwrap();
     assert_eq!(item["title"], "first");
     assert!(item["created_at"].as_i64().unwrap() > 0);
-    let uri = format!("/items/{id}");
+    let uri = format!("/api/items/{id}");
 
     let found = request(&app, "GET", &uri, None).await;
     assert_eq!(found.status(), StatusCode::OK);
     assert_eq!(body_json(found).await, item);
     assert_eq!(
-        body_json(request(&app, "GET", "/items", None).await).await,
+        body_json(request(&app, "GET", "/api/items", None).await).await,
         json!([item])
     );
 
@@ -202,7 +220,7 @@ async fn rest_crud_preserves_identity_and_rejected_updates() {
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        body_json(request(&app, "GET", "/items", None).await).await,
+        body_json(request(&app, "GET", "/api/items", None).await).await,
         json!([])
     );
 }
@@ -211,11 +229,11 @@ async fn rest_crud_preserves_identity_and_rejected_updates() {
 async fn rest_bulk_delete_validates_all_ids_before_changing_state() {
     let app = test_app(false);
     let item =
-        body_json(request(&app, "POST", "/items", Some(json!({"title": "first"}))).await).await;
+        body_json(request(&app, "POST", "/api/items", Some(json!({"title": "first"}))).await).await;
     let invalid = request(
         &app,
         "POST",
-        "/items/bulk-delete",
+        "/api/items/bulk-delete",
         Some(json!({
             "ids": [item["id"], "invalid"]
         })),
@@ -223,22 +241,29 @@ async fn rest_bulk_delete_validates_all_ids_before_changing_state() {
     .await;
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
-        body_json(request(&app, "GET", "/items", None).await).await,
+        body_json(request(&app, "GET", "/api/items", None).await).await,
         json!([item])
     );
 
     assert_eq!(
-        request(&app, "POST", "/items/bulk-delete", Some(json!({"ids": []}))).await.status(),
+        request(
+            &app,
+            "POST",
+            "/api/items/bulk-delete",
+            Some(json!({"ids": []}))
+        )
+        .await
+        .status(),
         StatusCode::NO_CONTENT
     );
     assert_eq!(
-        body_json(request(&app, "GET", "/items", None).await).await,
+        body_json(request(&app, "GET", "/api/items", None).await).await,
         json!([item])
     );
     let deleted = request(
         &app,
         "POST",
-        "/items/bulk-delete",
+        "/api/items/bulk-delete",
         Some(json!({
             "ids": [item["id"], item["id"], Uuid::new_v4().to_string()]
         })),
@@ -246,7 +271,7 @@ async fn rest_bulk_delete_validates_all_ids_before_changing_state() {
     .await;
     assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
     assert_eq!(
-        body_json(request(&app, "GET", "/items", None).await).await,
+        body_json(request(&app, "GET", "/api/items", None).await).await,
         json!([])
     );
 }
@@ -256,30 +281,36 @@ async fn rest_distinguishes_invalid_ids_missing_items_and_port_failures() {
     let app = test_app(false);
     for method in ["GET", "PATCH", "DELETE"] {
         let payload = (method == "PATCH").then(|| json!({"title": "updated"}));
-        let invalid = request(&app, method, "/items/invalid", payload.clone()).await;
+        let invalid = request(&app, method, "/api/items/invalid", payload.clone()).await;
         assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
         assert_eq!(
             body_json(invalid).await,
             json!({"error": "invalid item id"})
         );
-        let missing = request(&app, method, &format!("/items/{}", Uuid::new_v4()), payload).await;
+        let missing = request(
+            &app,
+            method,
+            &format!("/api/items/{}", Uuid::new_v4()),
+            payload,
+        )
+        .await;
         assert_eq!(missing.status(), StatusCode::NOT_FOUND);
         assert_eq!(body_json(missing).await, json!({"error": "item not found"}));
     }
-    let invalid = request(&app, "POST", "/items", Some(json!({"title": " "}))).await;
+    let invalid = request(&app, "POST", "/api/items", Some(json!({"title": " "}))).await;
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
 
     let app = app_with_repository(Arc::new(TestRepository::unavailable()), false);
-    let uri = format!("/items/{}", Uuid::new_v4());
+    let uri = format!("/api/items/{}", Uuid::new_v4());
     for (method, path, payload) in [
-        ("POST", "/items", Some(json!({"title": "first"}))),
-        ("GET", "/items", None),
+        ("POST", "/api/items", Some(json!({"title": "first"}))),
+        ("GET", "/api/items", None),
         ("GET", uri.as_str(), None),
         ("PATCH", uri.as_str(), Some(json!({"title": "updated"}))),
         ("DELETE", uri.as_str(), None),
         (
             "POST",
-            "/items/bulk-delete",
+            "/api/items/bulk-delete",
             Some(json!({"ids": [Uuid::new_v4().to_string()]})),
         ),
     ] {

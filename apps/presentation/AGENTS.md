@@ -4,11 +4,11 @@ Applies to the `presentation` library in `apps/presentation/`.
 
 ## Responsibility and rationale
 
-Define reusable inbound adapters: Axum HTTP handlers, health-check handlers,
-Tonic services, JSON/Protobuf DTOs, operation metadata, and transport error
-mapping. Keeping endpoint definitions separate from the executable host lets
-an application choose which routes, services, middleware, and development tools
-it exposes.
+Define reusable inbound adapters: Axum module routers, HTTP and health-check
+handlers, Tonic services, JSON/Protobuf DTOs, operation metadata, and transport
+error mapping. Keeping endpoint definitions separate from the executable host
+lets an application choose which modules, prefixes, services, middleware, and
+development tools it exposes.
 
 ## Dependencies and boundaries
 
@@ -19,16 +19,19 @@ it exposes.
   Consume application handler types and domain values through their public APIs.
 - Do not define a binary, initialize a runtime/database, read deployment
   environment variables, start listeners, or register provider implementations.
-- Do not choose route paths to mount, assemble the host router, install Swagger
-  UI, or apply host middleware. These decisions belong in root `src/`.
+- Define relative API routes here. Do not choose host prefixes, assemble the
+  host router, install Swagger UI, or apply host middleware. These decisions
+  belong in root `src/`.
 - Do not put business invariants, use-case orchestration, SQL, provider clients,
   or persistence models in presentation.
 
 ## Module conventions
 
-- `api.rs` exports HTTP handler, schema, and error namespaces.
+- `api.rs` exports HTTP handler, route, schema, and error namespaces.
+- `api/routes.rs` defines module routers without host prefixes. Root app merges
+  selected routers and mounts them under `/api`.
 - `api/handlers/<module>/` contains callable operation handlers; a shared health
-  handler may live in `api/handlers/health.rs`. Root app mounts them explicitly.
+  handler may live in `api/handlers/health.rs`. Module routers mount these handlers.
 - `api/schemas/<module>/` contains public request/response DTOs and schema metadata.
   Common error response schemas may live directly under `api/schemas/`.
 - Handler annotations describe endpoint contracts for OpenAPI. Root app selects
