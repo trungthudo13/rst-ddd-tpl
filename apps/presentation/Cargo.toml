@@ -1,0 +1,21 @@
+[package]
+name = "presentation"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+
+[dependencies]
+application = { path = "../application" }
+axum = { version = "0.8.9", features = ["json"] }
+domain = { path = "../domain" }
+prost = "0.14.5"
+serde = { version = "1.0", features = ["derive"] }
+tonic = { version = "0.14.9", features = ["transport"] }
+tonic-prost = "0.14.9"
+tracing = "0.1"
+utoipa = { version = "6.0.0", features = ["axum_extras"] }
+uuid = "1.18"
+
+[build-dependencies]
+protoc-bin-vendored = "3.3.0"
+tonic-prost-build = "0.14.9"

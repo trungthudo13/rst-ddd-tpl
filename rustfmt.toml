@@ -1,0 +1,14 @@
+combine_control_expr = false
+fn_call_width = 60
+use_small_heuristics = "Max"
+fn_params_layout = "Vertical"
+force_multiline_blocks = true
+overflow_delimited_expr = true
+group_imports = "StdExternalCrate"
+style_edition = "2024"
+match_arm_leading_pipes = "Always"
+imports_layout = "Vertical"
+format_strings = true
+control_brace_style = "ClosingNextLine"
+brace_style = "PreferSameLine"
+struct_lit_single_line = false

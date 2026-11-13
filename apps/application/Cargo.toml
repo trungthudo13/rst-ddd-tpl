@@ -1,0 +1,17 @@
+[package]
+name = "application"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+
+[dependencies]
+domain = { path = "../domain" }
+shared = { path = "../shared" }
+uuid = "1.18"
+
+[dev-dependencies]
+async-trait = "0.1.89"
+tokio = { version = "1.54", features = [
+    "macros",
+    "rt",
+] }

@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package item.v1;
+
+service ItemInternal {
+  rpc CreateItem(CreateItemRequest) returns (ItemReply);
+  rpc UpdateItem(UpdateItemRequest) returns (ItemReply);
+  rpc DeleteItem(DeleteItemRequest) returns (DeleteItemReply);
+  rpc DeleteItems(DeleteItemsRequest) returns (DeleteItemsReply);
+  rpc GetItem(GetItemRequest) returns (ItemReply);
+  rpc ListItems(ListItemsRequest) returns (ListItemsReply);
+}
+
+message CreateItemRequest {
+  string title = 1;
+}
+
+message UpdateItemRequest {
+  string id = 1;
+  string title = 2;
+}
+
+message DeleteItemRequest {
+  string id = 1;
+}
+
+message DeleteItemsRequest {
+  repeated string ids = 1;
+}
+
+message DeleteItemReply {}
+
+message DeleteItemsReply {}
+
+message GetItemRequest {
+  string id = 1;
+}
+
+message ListItemsRequest {}
+
+message ItemReply {
+  string id = 1;
+  string title = 2;
+  int64 created_at = 3;
+}
+
+message ListItemsReply {
+  repeated ItemReply items = 1;
+}

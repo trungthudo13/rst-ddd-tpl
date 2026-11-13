@@ -1,0 +1,9 @@
+[package]
+name = "domain"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+
+[dependencies]
+shared = { path = "../shared" }
+uuid = { version = "1.18", features = ["v4"] }

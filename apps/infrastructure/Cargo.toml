@@ -1,0 +1,19 @@
+[package]
+name = "infrastructure"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+
+[dependencies]
+anyhow = "1.0.100"
+async-trait = "0.1.89"
+domain = { path = "../domain" }
+shared = { path = "../shared" }
+hiqlite = { version = "0.16.0", default-features = false, features = ["sqlite", "auto-heal"] }
+rust-embed = "8.14.0"
+serde = { version = "1.0", features = ["derive"] }
+uuid = "1.18"
+
+[dev-dependencies]
+tempfile = "3.23"
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "time"] }
