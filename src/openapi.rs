@@ -14,6 +14,7 @@ use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(
+    servers((url = "/api")),
     paths(
         handlers::health::health,
         handlers::item::create_item::create_item,

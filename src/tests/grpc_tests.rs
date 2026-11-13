@@ -34,7 +34,8 @@ use super::{
 use crate::server::serve_with_shutdown;
 
 async fn start(
-    app: axum::Router
+    app: axum::Router,
+    prefix: &str,
 ) -> (
     ItemInternalClient<Channel>,
     oneshot::Sender<()>,
@@ -53,7 +54,12 @@ async fn start(
         .connect()
         .await
         .unwrap();
-    (ItemInternalClient::new(channel), shutdown, server)
+    let origin = format!("http://{address}{prefix}").parse().unwrap();
+    (
+        ItemInternalClient::with_origin(channel, origin),
+        shutdown,
+        server,
+    )
 }
 
 async fn stop(
@@ -66,7 +72,7 @@ async fn stop(
 
 #[tokio::test]
 async fn grpc_crud_uses_generated_client_over_combined_listener() {
-    let (mut client, shutdown, server) = start(test_app(false)).await;
+    let (mut client, shutdown, server) = start(test_app(false), "/internal").await;
     let item = client
         .create_item(CreateItemRequest {
             title: " first ".into(),
@@ -204,7 +210,7 @@ async fn grpc_crud_uses_generated_client_over_combined_listener() {
 
 #[tokio::test]
 async fn grpc_maps_validation_and_hides_provider_details() {
-    let (mut client, shutdown, server) = start(test_app(false)).await;
+    let (mut client, shutdown, server) = start(test_app(false), "/internal").await;
     assert_eq!(
         client
             .create_item(CreateItemRequest {
@@ -250,7 +256,7 @@ async fn grpc_maps_validation_and_hides_provider_details() {
     stop(shutdown, server).await;
 
     let app = app_with_repository(Arc::new(TestRepository::unavailable()), false);
-    let (mut client, shutdown, server) = start(app).await;
+    let (mut client, shutdown, server) = start(app, "/internal").await;
     let id = Uuid::new_v4().to_string();
     let errors = [
         client
@@ -290,6 +296,15 @@ async fn grpc_maps_validation_and_hides_provider_details() {
         assert_eq!(error.code(), Code::Internal);
         assert_eq!(error.message(), "internal server error");
     }
+    drop(client);
+    stop(shutdown, server).await;
+}
+
+#[tokio::test]
+async fn grpc_routes_require_internal_prefix() {
+    let (mut client, shutdown, server) = start(test_app(false), "").await;
+    let error = client.list_items(ListItemsRequest {}).await.unwrap_err();
+    assert_eq!(error.code(), Code::Unimplemented);
     drop(client);
     stop(shutdown, server).await;
 }

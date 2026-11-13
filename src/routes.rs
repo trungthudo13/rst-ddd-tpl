@@ -3,14 +3,10 @@ use std::time::Duration;
 use axum::{
     Router,
     http::StatusCode,
-    routing::{
-        get,
-        post,
-    },
 };
 use presentation::{
     ItemHandlers,
-    api::handlers,
+    api,
     internal,
 };
 use tower::ServiceBuilder;
@@ -33,31 +29,21 @@ pub(crate) fn router_with_debug(
     debug: bool,
 ) -> Router {
     let api = Router::new()
-        .route("/health", get(handlers::health::health))
-        .route(
-            "/items",
-            post(handlers::item::create_item).get(handlers::item::list_items),
-        )
-        .route("/items/bulk-delete", post(handlers::item::delete_items))
-        .route(
-            "/items/{id}",
-            get(handlers::item::get_item)
-                .patch(handlers::item::update_item)
-                .delete(handlers::item::delete_item),
-        );
-    let api = if debug {
-        api.merge(SwaggerUi::new("/docs/swagger").url("/docs/openapi.json", ApiDoc::openapi()))
+        .merge(api::routes::health())
+        .merge(api::routes::item())
+        .with_state(handlers.clone());
+    let internal = tonic::service::Routes::new(internal::server(handlers)).into_axum_router();
+    let app = Router::new().nest("/api", api).nest("/internal", internal);
+    let app = if debug {
+        app.merge(SwaggerUi::new("/docs/swagger").url("/docs/openapi.json", ApiDoc::openapi()))
     }
     else {
-        api
+        app
     };
 
-    tonic::service::Routes::from(api.with_state(handlers.clone()))
-        .add_service(internal::server(handlers))
-        .into_axum_router()
-        .layer(
-            ServiceBuilder::new().layer(TraceLayer::new_for_http()).layer(
-                TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(5)),
-            ),
-        )
+    app.layer(
+        ServiceBuilder::new().layer(TraceLayer::new_for_http()).layer(
+            TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(5)),
+        ),
+    )
 }

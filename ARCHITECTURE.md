@@ -20,7 +20,7 @@ over this overview.
 │   ├── main.rs                  # Tokio entry point
 │   ├── bootstrap.rs             # Configuration, providers, and lifecycle
 │   ├── di.rs                    # Use-case dependency registration
-│   ├── routes.rs                # Exposed HTTP routes, gRPC services, middleware
+│   ├── routes.rs                # Router composition, prefixes, and middleware
 │   ├── openapi.rs               # API document selected by the host
 │   ├── server.rs                # Listener and graceful shutdown
 │   └── tests/                   # Host-level HTTP/gRPC integration tests
@@ -68,18 +68,19 @@ because root app and presentation have separate manifests.
 
 | Package | Owns | Excludes | Why it is separate |
 | --- | --- | --- | --- |
-| [root app](src/AGENTS.md) | Runtime startup, configuration, DI, route/service selection, OpenAPI assembly, Swagger UI, middleware, listener lifecycle | Business rules, persistence queries, endpoint mapping | Each executable chooses its deployment and exposure policy while reusing the layer libraries. |
+| [root app](src/AGENTS.md) | Runtime startup, configuration, DI, router/service selection and prefixes, OpenAPI assembly, Swagger UI, middleware, listener lifecycle | Business rules, persistence queries, endpoint mapping | Each executable chooses its deployment and exposure policy while reusing the layer libraries. |
 | [shared](apps/shared/AGENTS.md) | Infrastructure interfaces, shared errors, and genuinely shared constants/enums | Entities, workflows, DTOs, adapters, framework types | Use cases and providers agree on contracts without importing one another's implementations. |
 | [domain](apps/domain/AGENTS.md) | Entities, identity, invariants, and behavior | SQL, network calls, commands, DTOs, infrastructure interface definitions | Business rules remain valid regardless of transport or storage. |
 | [application](apps/application/AGENTS.md) | Commands, queries, use-case orchestration, and consumption of shared ports | HTTP/gRPC, persistence rows, provider SDKs | One workflow can serve multiple entry points and be tested with a port implementation in memory. |
 | [infrastructure](apps/infrastructure/AGENTS.md) | Database connections, migrations, persistence models, outbound adapters | Business policy, inbound handlers, use-case orchestration | A provider can change without changing domain behavior or transport contracts. |
-| [presentation](apps/presentation/AGENTS.md) | HTTP/gRPC endpoint definitions, health handlers, DTO mapping, operation metadata, status codes | Database/providers, host routing, Swagger UI, environment configuration, listeners, business rules | Endpoint definitions can be reused by hosts with different route and development-tool policies. |
+| [presentation](apps/presentation/AGENTS.md) | Relative API module routers, HTTP/gRPC endpoint definitions, health handlers, DTO mapping, operation metadata, status codes | Database/providers, host composition and prefixes, Swagger UI, environment configuration, listeners, business rules | Module routers can be reused by hosts with different exposure and development-tool policies. |
 
 Root `src/` is the composition root. `main.rs` starts Tokio and delegates to
 bootstrap. Bootstrap loads configuration and starts infrastructure; `di.rs`
-injects shared interfaces into use cases; `routes.rs` mounts selected endpoints,
-gRPC services, Swagger UI, and middleware. `server.rs` serves that router and
-drains connections. Bootstrap shuts down HiQLite when the server exits.
+injects shared interfaces into use cases; `routes.rs` merges selected presentation
+API routers under `/api` and mounts gRPC services under `/internal`, plus Swagger
+UI and middleware. `server.rs` serves that router and drains connections.
+Bootstrap shuts down HiQLite when the server exits.
 
 ## Module scope inside each package
 
@@ -88,7 +89,7 @@ drains connections. Bootstrap shuts down HiQLite when the server exits.
 | Root `src/main.rs` | Tokio entry point that calls bootstrap | The executable entry point stays small as modules are added. |
 | Root `src/bootstrap.rs` | Configuration, tracing, provider selection, and lifecycle | Deployment choices stay outside reusable API definitions. |
 | Root `src/di.rs` | Construct use cases and inject their dependencies | Registrations are easy to locate and replace without changing handlers. |
-| Root `src/routes.rs` | Select HTTP routes and gRPC services, attach Swagger UI and middleware | The host explicitly controls what it exposes. |
+| Root `src/routes.rs` | Merge API routers under `/api`, mount gRPC services under `/internal`, attach Swagger UI and middleware | The host explicitly controls what it exposes. |
 | Root `src/openapi.rs` | Assemble metadata for the host's selected operations | API publication and documentation policy stay with route selection. |
 | Root `src/server.rs` | HTTP/1 and HTTP/2 listener, signals, and connection draining | Network lifecycle stays independent of endpoint definitions. |
 | `shared/errors.rs` | Domain, repository, and application error contracts | Error categories stay independent of Axum, Tonic, and HiQLite. Each layer owns the meaning of its failures. |
@@ -100,7 +101,8 @@ drains connections. Bootstrap shuts down HiQLite when the server exits.
 | `infrastructure/adapters/hiqlite/item_repository.rs` | SQL implementation of `ItemRepository` | Persistence details stay behind the port. |
 | `infrastructure/models/item.rs` | Private `ItemRow` database representation | Database column layout does not become the domain or API contract. |
 | `infrastructure/migrations/` | Embedded, ordered SQL schema changes | Schema evolution is versioned alongside its adapter. |
-| `presentation/api.rs` | Export HTTP handler, schema, and error namespaces | Root app can choose individual endpoint definitions. |
+| `presentation/api.rs` | Export HTTP handler, route, schema, and error namespaces | Root app can choose reusable module routers. |
+| `presentation/api/routes.rs` | Define relative health and Item routes | Endpoint paths and methods stay with presentation; the host adds prefixes. |
 | `presentation/api/handlers/item/` | Parse requests, invoke handlers, map responses | Transport validation and application orchestration have distinct owners. |
 | `presentation/api/schemas/item/` | JSON request and response DTOs | Public payloads can change without changing entities. |
 | `presentation/api/error.rs` | HTTP errors and mapping from application/domain failures | Transport-specific categories and statuses stay outside shared contracts. |
@@ -151,7 +153,7 @@ domain services, or domain events when actual business behavior requires them.
 ## Item request flow
 
 ```text
-POST /items or item.v1.ItemInternal/CreateItem
+POST /api/items or /internal/item.v1.ItemInternal/CreateItem
   -> presentation request DTO
   -> CreateItemCommand
   -> CreateItemHandler::execute
@@ -236,8 +238,9 @@ or duplicate entity invariants.
 Start with a business capability: define its entity behavior in domain and the
 required infrastructure interfaces in shared, add command/query handlers,
 implement adapters, and define transport handlers. Register dependencies in root
-`src/di.rs`, then mount selected handlers and update OpenAPI in the root app. Add
-a new namespace consistently across affected layers.
+`src/di.rs`, define relative API module routers in presentation, then merge selected
+routers and update OpenAPI in the root app. Add a new namespace consistently
+across affected layers.
 Separate independently deployed services into their own composition roots and
 contracts when required; the current workspace builds one service.
 
@@ -290,14 +293,14 @@ environment variables. The checked-in values describe a local single-node demo:
 
 The service embeds and applies migrations before accepting requests. `.env` and
 `.data/` are ignored by Git; `Cargo.lock` is included for reproducible builds.
-Stop with Ctrl-C to drain connections and shut down the database. `/health`
+Stop with Ctrl-C to drain connections and shut down the database. `/api/health`
 reports process liveness, not a database readiness check.
 
 ### REST example
 
 ```bash
-curl -sS http://127.0.0.1:13000/health
-curl -sS -X POST http://127.0.0.1:13000/items \
+curl -sS http://127.0.0.1:13000/api/health
+curl -sS -X POST http://127.0.0.1:13000/api/items \
   -H 'content-type: application/json' -d '{"title":"First item"}'
 ```
 
@@ -305,30 +308,50 @@ Copy the returned `id` into `ITEM_ID`, then run:
 
 ```bash
 ITEM_ID="paste-created-uuid-here"
-curl -sS http://127.0.0.1:13000/items
-curl -sS "http://127.0.0.1:13000/items/$ITEM_ID"
-curl -sS -X PATCH "http://127.0.0.1:13000/items/$ITEM_ID" \
+curl -sS http://127.0.0.1:13000/api/items
+curl -sS "http://127.0.0.1:13000/api/items/$ITEM_ID"
+curl -sS -X PATCH "http://127.0.0.1:13000/api/items/$ITEM_ID" \
   -H 'content-type: application/json' -d '{"title":"Updated item"}'
-curl -i -X DELETE "http://127.0.0.1:13000/items/$ITEM_ID"
+curl -i -X DELETE "http://127.0.0.1:13000/api/items/$ITEM_ID"
 ```
 
 Create returns HTTP 201; reads and updates return 200; deletion returns 204.
-`POST /items/bulk-delete` accepts `{"ids":["<uuid>"]}` and returns 204, ignoring
+`POST /api/items/bulk-delete` accepts `{"ids":["<uuid>"]}` and returns 204, ignoring
 missing IDs. Valid JSON with a blank title or malformed UUID returns 400; an
 unknown UUID returns 404 for get/update/delete. Repository failures return a
 generic 500 response. Axum handles malformed JSON and missing fields through its
 standard extractor responses.
 
+OpenAPI uses `/api` as its server URL and keeps operation paths relative to it.
+With `DEBUG=true`, Swagger UI remains at `/docs/swagger/` and the document at
+`/docs/openapi.json`.
+
 ### gRPC example
 
-Use grpcurl with the source contract; reflection is not enabled:
+The host mounts generated gRPC services under `/internal`. Clients must include
+that prefix before the generated service/method path. For a generated Tonic client,
+set its origin explicitly:
 
-```bash
-grpcurl -plaintext -import-path proto -proto item/v1/item.proto \
-  -d '{"title":"First gRPC item"}' 127.0.0.1:13000 item.v1.ItemInternal/CreateItem
-grpcurl -plaintext -import-path proto -proto item/v1/item.proto \
-  -d '{}' 127.0.0.1:13000 item.v1.ItemInternal/ListItems
+```rust
+use presentation::internal::pb::item::v1::{
+    CreateItemRequest,
+    item_internal_client::ItemInternalClient,
+};
+
+let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:13000")
+    .connect()
+    .await?;
+let origin = "http://127.0.0.1:13000/internal".parse()?;
+let mut client = ItemInternalClient::with_origin(channel, origin);
+let item = client
+    .create_item(CreateItemRequest { title: "First gRPC item".into() })
+    .await?
+    .into_inner();
 ```
+
+Setting only the connection endpoint path does not prepend it to generated RPC
+requests. Direct grpcurl calls require a proxy that adds `/internal`; reflection
+is not enabled.
 
 `GetItem`, `UpdateItem`, `DeleteItem`, and `DeleteItems` use the same service and
 listener. Their request fields are defined in `proto/item/v1/item.proto`.
@@ -394,7 +417,7 @@ the container.
 The image declares a volume at `/data`, writable by the runtime user. The named
 volume in the example retains database and Raft state across container
 replacement. Check liveness from the host with
-`curl http://127.0.0.1:13000/health`.
+`curl http://127.0.0.1:13000/api/health`.
 
 Without an explicit mount, Docker creates an anonymous volume, which is removed
 with the container when using `--rm`. `VOLUME ["${HQL_DATA_DIR}"]` expands to
