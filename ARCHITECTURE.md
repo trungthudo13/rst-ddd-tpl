@@ -282,7 +282,7 @@ environment variables. The checked-in values describe a local single-node demo:
 | `DEBUG` | `true` | Enable `/docs/swagger/` and `/docs/openapi.json` HTTP routes |
 | `RUST_LOG` | `info` | Tracing filter |
 | `HQL_NODE_ID` | `1` | HiQLite node identity |
-| `HQL_NODES` | `1 127.0.0.1:8100 127.0.0.1:8200` | Node identity, Raft address, and database API address |
+| `HQL_NODES` | `1 127.0.0.1:18100 127.0.0.1:18200` | Node identity, Raft address, and database API address |
 | `HQL_LISTEN_ADDR_RAFT` / `HQL_LISTEN_ADDR_API` | `127.0.0.1` | Database listeners |
 | `HQL_DATA_DIR` / `HQL_FILENAME_DB` | `.data` / `hiqlite.db` | Local persistence location |
 | `HQL_SECRET_RAFT` / `HQL_SECRET_API` | Demo values | Database transport secrets; replace for a deployment |
@@ -335,3 +335,120 @@ listener. Their request fields are defined in `proto/item/v1/item.proto`.
 Validation errors map to `InvalidArgument`, missing records to `NotFound`, and
 repository failures to a generic `Internal` status. The integration tests exercise
 the generated Tonic client over the combined HTTP/gRPC listener.
+
+## Container image
+
+The Dockerfile uses four stages:
+
+1. `toolchain` installs native build dependencies and the Rust version pinned in
+   `rust-toolchain.toml`.
+2. `build` compiles the root `app` binary in release mode with symbols stripped.
+   BuildKit cache mounts retain downloaded crates and compiled dependencies for
+   subsequent builds.
+3. `base` provides a Distroless C/C++ runtime, HiQLite defaults, writable storage
+   at `/data`, UID/GID `65532:65532`, and the `/app/app` entrypoint. It can be built
+   independently of the Rust build stages and contains no application binary.
+4. `runtime` extends `base` with the compiled demo binary at `/app/app`.
+
+Both runtime images contain no source, Cargo, compiler, or shell.
+
+SQL migrations, generated Protobuf bindings, and Swagger assets are embedded at
+build time. Local env files, database state, Git history, and host build artifacts
+are excluded from the build context by `.dockerignore`.
+
+Build with Docker and the Buildx/BuildKit component:
+
+```bash
+docker build -t app:local .
+docker build --target base -t app:base .
+```
+
+The Dockerfile defines all HiQLite settings used by the demo as single-node
+runtime defaults: node identity and addresses, listeners, `/data`, database
+filename, transport secrets, and log synchronization. Override app settings and
+HiQLite defaults through `--env` or your own `--env-file`, including
+`HQL_SECRET_RAFT` and `HQL_SECRET_API` for the deployment.
+The `CARGO_*` variables belong to the build stage only and are not inherited by
+runtime.
+
+```bash
+docker run --rm --name app \
+  --publish 13000:13000 \
+  --mount type=volume,source=app-data,target=/data \
+  --stop-timeout 30 \
+  app:local
+```
+
+The base declares HiQLite TCP ports `18100` and `18200` through `EXPOSE`.
+Downstream images declare their own application ports. This is image metadata;
+publish ports with `--publish` as needed. REST and plaintext HTTP/2 gRPC in the
+demo share the app listener on port `13000`.
+
+In `HQL_NODES`, each entry contains the node ID, Raft address, and HiQLite API
+address, in that order. Port `18100` carries Raft replication, leader elections,
+and snapshot transfer between nodes. Port `18200` serves the HiQLite API used by
+clients to communicate with the database leader. Both listeners bind to
+`127.0.0.1` in the default single-node configuration, keeping them internal to
+the container.
+
+The image declares a volume at `/data`, writable by the runtime user. The named
+volume in the example retains database and Raft state across container
+replacement. Check liveness from the host with
+`curl http://127.0.0.1:13000/health`.
+
+Without an explicit mount, Docker creates an anonymous volume, which is removed
+with the container when using `--rm`. `VOLUME ["${HQL_DATA_DIR}"]` expands to
+`/data` at build time; changing `HQL_DATA_DIR` at runtime does not change this
+declared volume. Mount writable storage at the configured path when overriding
+the data directory.
+
+The default build uses one Cargo job to limit memory consumption. On a larger
+builder, override it with `docker build --build-arg CARGO_BUILD_JOBS=4 -t app:local .`.
+
+### Publishing and reusing images
+
+`.github/workflows/publish-image.yml` runs when a Git tag is pushed. It builds
+both Dockerfile targets for `linux/amd64` and `linux/arm64` and publishes to
+`ghcr.io/<owner>/<repository>` using the workflow's `GITHUB_TOKEN`. The repository
+name follows the current GitHub repository, so forks publish to their own path.
+No additional registry credentials are required.
+
+For a tag such as `v1.0.0`, the published images are:
+
+| Image tag | Contents and use |
+| --- | --- |
+| `v1.0.0` | Runnable Item demo, built from the tagged source. |
+| `base-v1.0.0` | Shared runtime and configuration for downstream service binaries. |
+
+Commit and push the workflow and Dockerfile changes before creating a release
+tag. Use Docker-compatible release tag names such as `v1.0.0`:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+For anonymous pulls, make the GHCR package public after its first publication.
+For private packages, authenticate pulls and grant consuming repositories access
+to the package. See [GHCR access and visibility](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
+
+After compiling a downstream service for Linux, its Dockerfile can be:
+
+```dockerfile
+FROM ghcr.io/<owner>/<repository>:base-v1.0.0
+COPY --chown=65532:65532 --chmod=755 target/release/my-service /app/app
+EXPOSE 8080/tcp
+```
+
+Replace the owner, repository, version, and binary name with the intended values.
+The base supplies `WORKDIR`, `USER`, HiQLite defaults, `VOLUME`, `STOPSIGNAL`, and
+`ENTRYPOINT`; copying the binary to `/app/app` is enough to select what runs.
+Configure the binary to listen on `0.0.0.0:8080` and publish it with
+`--publish 8080:8080`. For hosts retaining this template's configuration, set
+`APP_ADDR=0.0.0.0:8080`. `EXPOSE` does not change the application's listen port.
+
+The binary must match the image's Linux architecture and be compatible with
+Debian 13's glibc. Building with `rust:1-slim-trixie` matches this runtime. Any
+additional dynamically linked libraries required by a service must also be
+provided in its runtime image. HiQLite code and migrations remain embedded in
+the service binary.

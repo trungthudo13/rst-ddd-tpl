@@ -1,0 +1,16 @@
+.git
+.github
+.code-review-graph
+.idea
+.vscode
+target
+**/target
+.data
+**/.data
+.env
+.env.*
+**/.env
+**/.env.*
+**/*.rs.bk
+**/*.pdb
+**/mutants.out*
