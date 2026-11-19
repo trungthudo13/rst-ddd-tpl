@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use domain::Item;
 use shared::{
-    ApplicationError,
+    Error,
     ItemRepository,
 };
 
@@ -33,7 +33,7 @@ impl<R: ItemRepository<Entity = Item> + ?Sized> GetItemsHandler<R> {
     pub async fn execute(
         &self,
         _query: GetItemsQuery,
-    ) -> Result<Vec<Item>, ApplicationError> {
-        Ok(self.repository.list().await?)
+    ) -> Result<Vec<Item>, Error> {
+        self.repository.list().await
     }
 }

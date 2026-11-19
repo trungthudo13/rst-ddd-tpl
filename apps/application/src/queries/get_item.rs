@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use domain::Item;
 use shared::{
-    ApplicationError,
+    Error,
     ItemRepository,
 };
 use uuid::Uuid;
@@ -36,7 +36,7 @@ impl<R: ItemRepository<Entity = Item> + ?Sized> GetItemHandler<R> {
     pub async fn execute(
         &self,
         query: GetItemQuery,
-    ) -> Result<Item, ApplicationError> {
-        self.repository.find(query.id).await?.ok_or(ApplicationError::NotFound(query.id))
+    ) -> Result<Item, Error> {
+        self.repository.find(query.id).await?.ok_or(Error::NotFound(query.id))
     }
 }

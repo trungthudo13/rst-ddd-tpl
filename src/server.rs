@@ -29,9 +29,13 @@ use tower::{
     service_fn,
 };
 
-pub(crate) async fn serve(app: Router) -> anyhow::Result<()> {
-    let address = std::env::var("APP_ADDR").unwrap_or_else(|_| "0.0.0.0:13000".to_owned());
-    let listener = TcpListener::bind(&address).await?;
+pub(crate) async fn serve(
+    app: Router,
+    address: &str,
+) -> Result<(), shared::Error> {
+    let listener = TcpListener::bind(address)
+        .await
+        .map_err(|error| shared::Error::Unexpected(format!("could not bind {address}: {error}")))?;
     tracing::info!(%address, "listening");
     serve_with_shutdown(listener, app, shutdown_signal()).await
 }
@@ -40,7 +44,7 @@ pub(crate) async fn serve_with_shutdown(
     listener: TcpListener,
     app: Router,
     shutdown: impl Future<Output = ()>,
-) -> anyhow::Result<()> {
+) -> Result<(), shared::Error> {
     let mut shutdown = pin!(shutdown);
     let server = Builder::new(TokioExecutor::new());
     let graceful = GracefulShutdown::new();

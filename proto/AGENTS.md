@@ -21,8 +21,8 @@ schema name describes its scope. Do not use transport or layer names such as
 Source:       proto/item/v1/item.proto
 Package:      item.v1
 Service FQN:  item.v1.ItemInternal
-Wrapper:      apps/presentation/src/internal/pb/item/v1.rs
-Rust module:  presentation::internal::pb::item::v1
+Wrapper:      src/internal/pb/item/v1.rs
+Rust module:  crate::internal::pb::item::v1
 ```
 
 The wrapper contains `tonic::include_proto!("item.v1");`. Its parents declare
@@ -32,8 +32,8 @@ stable for consumers; version them if a breaking change is required.
 
 ## Handler and REST schema organization
 
-- Use `presentation/src/api/handlers/<module>/` for REST operations and
-  `presentation/src/internal/handlers/<module>/` for gRPC operations.
+- Use `src/api/handlers/<module>/` for REST operations and
+  `src/internal/handlers/<module>/` for gRPC operations.
 - Implement the generated service trait in `internal/handlers/<module>.rs` and
   delegate each method to its operation file. Do not hand-code RPC paths.
 - Use `api/schemas/<module>/` for REST request/response DTOs, with a
@@ -80,7 +80,7 @@ message ExampleReply {
 1. Identify the owning business module and choose the current or a new major
    version based on compatibility.
 2. Keep the source path, `package`, and generated wrapper synchronized.
-3. Update `apps/presentation/build.rs`, including compile inputs and
+3. Update `build.rs`, including compile inputs and
    `cargo:rerun-if-changed` declarations.
 4. Update RPC handlers, DTO mapping, tests, and the gRPC usage documentation.
 5. Verify wire compatibility, generated client/server behavior, and every

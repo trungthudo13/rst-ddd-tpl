@@ -4,14 +4,10 @@ use std::sync::{
 };
 
 use async_trait::async_trait;
-use domain::{
-    DomainError,
-    Item,
-};
+use domain::Item;
 use shared::{
-    ApplicationError,
+    Error,
     ItemRepository,
-    RepositoryError,
 };
 use uuid::Uuid;
 
@@ -43,7 +39,7 @@ impl ItemRepository for InMemoryRepository {
     async fn save(
         &self,
         item: &Item,
-    ) -> Result<(), RepositoryError> {
+    ) -> Result<(), Error> {
         self.items.lock().unwrap().push(item.clone());
         Ok(())
     }
@@ -51,16 +47,16 @@ impl ItemRepository for InMemoryRepository {
     async fn update(
         &self,
         item: &Item,
-    ) -> Result<(), RepositoryError> {
+    ) -> Result<(), Error> {
         let mut items = self.items.lock().unwrap();
         if self.missing_on_update {
             items.retain(|existing| existing.id() != item.id());
-            return Err(RepositoryError::NotFound(item.id()));
+            return Err(Error::NotFound(item.id()));
         }
         let existing = items
             .iter_mut()
             .find(|existing| existing.id() == item.id())
-            .ok_or(RepositoryError::NotFound(item.id()))?;
+            .ok_or(Error::NotFound(item.id()))?;
         *existing = item.clone();
         Ok(())
     }
@@ -68,10 +64,9 @@ impl ItemRepository for InMemoryRepository {
     async fn delete(
         &self,
         id: Uuid,
-    ) -> Result<(), RepositoryError> {
+    ) -> Result<(), Error> {
         let mut items = self.items.lock().unwrap();
-        let index =
-            items.iter().position(|item| item.id() == id).ok_or(RepositoryError::NotFound(id))?;
+        let index = items.iter().position(|item| item.id() == id).ok_or(Error::NotFound(id))?;
         items.remove(index);
         Ok(())
     }
@@ -79,7 +74,7 @@ impl ItemRepository for InMemoryRepository {
     async fn delete_many(
         &self,
         ids: &[Uuid],
-    ) -> Result<(), RepositoryError> {
+    ) -> Result<(), Error> {
         self.items.lock().unwrap().retain(|item| !ids.contains(&item.id()));
         Ok(())
     }
@@ -87,11 +82,11 @@ impl ItemRepository for InMemoryRepository {
     async fn find(
         &self,
         id: Uuid,
-    ) -> Result<Option<Item>, RepositoryError> {
+    ) -> Result<Option<Item>, Error> {
         Ok(self.items.lock().unwrap().iter().find(|item| item.id() == id).cloned())
     }
 
-    async fn list(&self) -> Result<Vec<Item>, RepositoryError> {
+    async fn list(&self) -> Result<Vec<Item>, Error> {
         Ok(self.items.lock().unwrap().clone())
     }
 }
@@ -123,18 +118,14 @@ async fn use_cases_accept_an_implementation_through_the_shared_interface() {
     let create = CreateItemHandler::new(Arc::clone(&repository));
     let get = GetItemHandler::new(repository);
 
-    let item = create
-        .execute(CreateItemCommand {
-            title: "injected".into(),
-        })
-        .await
-        .unwrap();
-    let found = get
-        .execute(GetItemQuery {
-            id: item.id(),
-        })
-        .await
-        .unwrap();
+    let create_item_command = CreateItemCommand {
+        title: "injected".into(),
+    };
+    let item = create.execute(create_item_command).await.unwrap();
+    let get_item_query = GetItemQuery {
+        id: item.id(),
+    };
+    let found = get.execute(get_item_query).await.unwrap();
 
     assert_eq!(found, item);
 }
@@ -144,23 +135,17 @@ async fn create_get_and_list_use_repository_port() {
     let repository = Arc::new(InMemoryRepository::default());
     let handlers = build_handlers(repository);
 
-    let item = handlers
-        .create_item
-        .execute(CreateItemCommand {
-            title: "  first item  ".into(),
-        })
-        .await
-        .unwrap();
+    let create_item_command = CreateItemCommand {
+        title: "  first item  ".into(),
+    };
+    let item = handlers.create_item.execute(create_item_command).await.unwrap();
 
     assert_eq!(item.title(), "first item");
+    let get_item_query = GetItemQuery {
+        id: item.id(),
+    };
     assert_eq!(
-        handlers
-            .get_item
-            .execute(GetItemQuery {
-                id: item.id()
-            })
-            .await
-            .unwrap(),
+        handlers.get_item.execute(get_item_query).await.unwrap(),
         item
     );
     assert_eq!(
@@ -173,78 +158,64 @@ async fn create_get_and_list_use_repository_port() {
 async fn update_changes_title_and_preserves_created_at() {
     let repository = Arc::new(InMemoryRepository::default());
     let handlers = build_handlers(repository);
-    let item = handlers
-        .create_item
-        .execute(CreateItemCommand {
-            title: "first item".into(),
-        })
-        .await
-        .unwrap();
+    let create_item_command = CreateItemCommand {
+        title: "first item".into(),
+    };
+    let item = handlers.create_item.execute(create_item_command).await.unwrap();
 
-    let updated = handlers
-        .update_item
-        .execute(UpdateItemCommand {
-            id: item.id(),
-            title: "  updated item  ".into(),
-        })
-        .await
-        .unwrap();
+    let update_item_command = UpdateItemCommand {
+        id: item.id(),
+        title: "  updated item  ".into(),
+    };
+    let updated = handlers.update_item.execute(update_item_command).await.unwrap();
 
     assert_eq!(updated.title(), "updated item");
     assert_eq!(updated.created_at(), item.created_at());
+    let get_item_query = GetItemQuery {
+        id: item.id(),
+    };
     assert_eq!(
-        handlers
-            .get_item
-            .execute(GetItemQuery {
-                id: item.id()
-            })
-            .await
-            .unwrap(),
+        handlers.get_item.execute(get_item_query).await.unwrap(),
         updated
     );
 
+    let update_item_command = UpdateItemCommand {
+        id: item.id(),
+        title: " ".into(),
+    };
     assert!(matches!(
-        handlers
-            .update_item
-            .execute(UpdateItemCommand {
-                id: item.id(),
-                title: " ".into()
-            })
-            .await,
-        Err(ApplicationError::Domain(DomainError::EmptyTitle))
+        handlers.update_item.execute(update_item_command).await,
+        Err(Error::EmptyTitle)
     ));
+    let get_item_query = GetItemQuery {
+        id: item.id(),
+    };
     assert_eq!(
-        handlers
-            .get_item
-            .execute(GetItemQuery {
-                id: item.id()
-            })
-            .await
-            .unwrap(),
+        handlers.get_item.execute(get_item_query).await.unwrap(),
         updated
     );
 }
 
 #[tokio::test]
 async fn update_reports_an_item_deleted_after_it_was_loaded() {
-    let repository = Arc::new(InMemoryRepository {
+    let in_memory_repository = InMemoryRepository {
         missing_on_update: true,
         ..Default::default()
-    });
+    };
+    let repository = Arc::new(in_memory_repository);
     let handlers = build_handlers(repository);
-    let item = handlers
-        .create_item
-        .execute(CreateItemCommand {
-            title: "first".into(),
-        })
-        .await
-        .unwrap();
+    let create_item_command = CreateItemCommand {
+        title: "first".into(),
+    };
+    let item = handlers.create_item.execute(create_item_command).await.unwrap();
 
+    let update_item_command = UpdateItemCommand {
+        id: item.id(),
+        title: "updated".into(),
+    };
     assert!(matches!(
-        handlers.update_item.execute(UpdateItemCommand {
-            id: item.id(), title: "updated".into()
-        }).await,
-        Err(ApplicationError::NotFound(id)) if id == item.id()
+        handlers.update_item.execute(update_item_command).await,
+        Err(Error::NotFound(id)) if id == item.id()
     ));
     assert!(handlers.get_items.execute(GetItemsQuery).await.unwrap().is_empty());
 }
@@ -254,42 +225,34 @@ async fn rejects_blank_title_and_reports_missing_item() {
     let repository = Arc::new(InMemoryRepository::default());
     let handlers = build_handlers(repository);
 
+    let create_item_command = CreateItemCommand {
+        title: "  ".into(),
+    };
     assert!(matches!(
-        handlers
-            .create_item
-            .execute(CreateItemCommand {
-                title: "  ".into()
-            })
-            .await,
-        Err(ApplicationError::Domain(DomainError::EmptyTitle))
+        handlers.create_item.execute(create_item_command).await,
+        Err(Error::EmptyTitle)
     ));
+    let get_item_query = GetItemQuery {
+        id: Uuid::new_v4(),
+    };
     assert!(matches!(
-        handlers
-            .get_item
-            .execute(GetItemQuery {
-                id: Uuid::new_v4()
-            })
-            .await,
-        Err(ApplicationError::NotFound(_))
+        handlers.get_item.execute(get_item_query).await,
+        Err(Error::NotFound(_))
     ));
+    let update_item_command = UpdateItemCommand {
+        id: Uuid::new_v4(),
+        title: "missing".into(),
+    };
     assert!(matches!(
-        handlers
-            .update_item
-            .execute(UpdateItemCommand {
-                id: Uuid::new_v4(),
-                title: "missing".into()
-            })
-            .await,
-        Err(ApplicationError::NotFound(_))
+        handlers.update_item.execute(update_item_command).await,
+        Err(Error::NotFound(_))
     ));
+    let delete_item_command = DeleteItemCommand {
+        id: Uuid::new_v4(),
+    };
     assert!(matches!(
-        handlers
-            .delete_item
-            .execute(DeleteItemCommand {
-                id: Uuid::new_v4()
-            })
-            .await,
-        Err(ApplicationError::NotFound(_))
+        handlers.delete_item.execute(delete_item_command).await,
+        Err(Error::NotFound(_))
     ));
 }
 
@@ -297,28 +260,19 @@ async fn rejects_blank_title_and_reports_missing_item() {
 async fn deletes_one_item_and_bulk_items() {
     let repository = Arc::new(InMemoryRepository::default());
     let handlers = build_handlers(repository);
-    let first = handlers
-        .create_item
-        .execute(CreateItemCommand {
-            title: "first".into(),
-        })
-        .await
-        .unwrap();
-    let second = handlers
-        .create_item
-        .execute(CreateItemCommand {
-            title: "second".into(),
-        })
-        .await
-        .unwrap();
+    let create_item_command = CreateItemCommand {
+        title: "first".into(),
+    };
+    let first = handlers.create_item.execute(create_item_command).await.unwrap();
+    let create_item_command = CreateItemCommand {
+        title: "second".into(),
+    };
+    let second = handlers.create_item.execute(create_item_command).await.unwrap();
 
-    handlers
-        .delete_item
-        .execute(DeleteItemCommand {
-            id: first.id(),
-        })
-        .await
-        .unwrap();
+    let delete_item_command = DeleteItemCommand {
+        id: first.id(),
+    };
+    handlers.delete_item.execute(delete_item_command).await.unwrap();
     let second_id = second.id();
     assert_eq!(
         handlers.get_items.execute(GetItemsQuery).await.unwrap(),
@@ -326,12 +280,9 @@ async fn deletes_one_item_and_bulk_items() {
     );
 
     let remaining_ids = [second_id];
-    handlers
-        .delete_items
-        .execute(DeleteItemsCommand {
-            ids: remaining_ids.to_vec(),
-        })
-        .await
-        .unwrap();
+    let delete_items_command = DeleteItemsCommand {
+        ids: remaining_ids.to_vec(),
+    };
+    handlers.delete_items.execute(delete_items_command).await.unwrap();
     assert!(handlers.get_items.execute(GetItemsQuery).await.unwrap().is_empty());
 }

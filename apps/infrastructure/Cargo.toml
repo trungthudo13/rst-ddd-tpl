@@ -5,7 +5,6 @@ edition = "2024"
 rust-version = "1.95"
 
 [dependencies]
-anyhow = "1.0.100"
 async-trait = "0.1.89"
 domain = { path = "../domain" }
 shared = { path = "../shared" }

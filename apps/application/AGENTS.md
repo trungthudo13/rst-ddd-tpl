@@ -48,10 +48,26 @@ reuse the same behavior without knowing a database or provider.
 - Do not resolve dependencies through a global service locator or instantiate
   providers inside use cases; the composition root supplies dependencies.
 - Do not send messages or notifications directly through a provider.
-- Map domain and port failures into `shared::ApplicationError`. Missing rows on a
-  write remain not-found errors rather than backend failures.
+- Propagate domain and port failures as `shared::Error` without layer wrappers.
+  Missing writes remain `Error::NotFound`; unexpected failures stay distinct.
 - Keep `ItemRow`, REST/gRPC DTOs, HTTP statuses, endpoints, and credentials outside
   this package.
+
+## Mappers
+
+- Create explicit capability-specific mappers under `src/mappers/` for
+  command/query ↔ entity and command/query ↔ domain business-model conversions.
+  Implement the reverse direction with explicit context for any missing fields.
+- Handlers must call mappers instead of assembling domain inputs, entities, or
+  application outputs inline. Keep conversion implementations in mapper modules.
+- Mappers perform structural conversion only. Domain behavior owns all business
+  processing and validation; mappings must preserve protected entity construction
+  and invariants.
+- Transport schema ↔ command/query mappings belong in presentation. Application
+  mappers must not import REST, Protobuf, or persistence schema types.
+- Required boundary mappers may have one consumer; other shared helpers still
+  require the actual reuse specified above. Test both mapping directions and
+  conversion failures.
 
 ## Definition of done
 

@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod mappers;
 pub mod queries;
 
 pub use commands::{
@@ -17,7 +18,7 @@ pub use queries::{
     GetItemsHandler,
     GetItemsQuery,
 };
-pub use shared::ApplicationError;
+pub use shared::Error;
 
 #[cfg(test)]
 mod tests;

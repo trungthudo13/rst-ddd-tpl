@@ -20,7 +20,7 @@ in the HiQLite implementation of `shared::ItemRepository`.
 | Path | Scope and reason for separation |
 | --- | --- |
 | `adapters/hiqlite/database.rs` | Node connection, embedded migrations, and shutdown; isolates database lifecycle from entity SQL. |
-| `adapters/hiqlite/item_repository.rs` | `ItemRepository` implementation; isolates provider queries and row mapping from use cases. |
+| `adapters/hiqlite/item_repository.rs` | `ItemRepository` implementation; isolates provider queries from use cases; mappings live in child `mappers/` modules. |
 | `models/item.rs` | Crate-private `ItemRow`; keeps table layout separate from domain entities and public DTOs. |
 | `migrations/` | Ordered embedded SQL migrations; schema evolution stays with its adapter. |
 | `adapters/cache.rs` | Future provider connections, keys, encoding, and technical retries; the calling layer owns TTL policy. |
@@ -47,7 +47,7 @@ port. Group technical namespaces by provider/protocol and then business module.
   entities through the domain and never return `ItemRow` across the boundary.
 - Respect repository semantics, including missing updates/deletes. Do not turn
   an update into an insert or expose a provider failure as a business outcome.
-- Bind data values as SQL parameters and map provider errors into port errors.
+- Bind data values as SQL parameters and map provider errors into `shared::Error`.
 - Do not hard-code deployment credentials, endpoints, or secrets in adapters.
 - Technical retries, serialization, rate limits, and provider error translation
   stay here; the application owns workflow and message/content decisions.
@@ -56,6 +56,20 @@ port. Group technical namespaces by provider/protocol and then business module.
 - Use `<module>.rs` and same-named child folders, never `mod.rs`. Namespace files
   contain declarations/re-exports, not provider implementations. Avoid catch-all
   `utils`, `common`, and `helpers` modules.
+
+## Mappers
+
+- Create explicit `mappers/` modules within the owning provider/capability adapter
+  for persistence/provider-model ↔ domain-entity/business-model conversions.
+  Implement both read and write directions.
+- Adapters must delegate conversion to mappers rather than assemble domain
+  objects or persistence representations inline. Keep table model files focused
+  on their single table struct.
+- Reconstruct entities through validated domain construction. Preserve identifiers,
+  nullability, values, and provider error mapping without adding business rules.
+- Command/query mappings belong in application; transport schema mappings belong
+  in presentation. Infrastructure mappers must not import either layer. Verify
+  both directions and malformed stored/provider values.
 
 ## Definition of done
 
