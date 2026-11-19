@@ -2,12 +2,10 @@
 
 **Rust with DDD template** is a general-purpose Rust service template using
 Domain-Driven Design (DDD) and hexagonal architecture. Item CRUD demonstrates the
-boundaries; it does not prescribe the business model of services built from the
-template.
+boundaries without prescribing the business model of a downstream service.
 
-Read the [root app rules](src/AGENTS.md), [library rules](apps/AGENTS.md), and the
-relevant package `AGENTS.md` before changing code. Scoped rules take precedence
-over this overview.
+Read the [root app rules](src/AGENTS.md), [library rules](apps/AGENTS.md), and every
+affected scoped `AGENTS.md` before changing code.
 
 ## Workspace and dependency direction
 
@@ -15,179 +13,173 @@ over this overview.
 .
 ├── Cargo.toml                    # Root app package and workspace
 ├── Cargo.lock                    # Reproducible dependency resolution
-├── proto/item/v1/item.proto      # Versioned gRPC contract
-├── src/                         # Executable app and composition root
-│   ├── main.rs                  # Tokio entry point
+├── build.rs                      # Versioned Protobuf generation into OUT_DIR
+├── tools/rslint/                 # Repository rules and workspace Clippy
+├── proto/item/v1/item.proto      # Existing Item gRPC contract
+├── src/                         # Executable, presentation, and composition root
+│   ├── main.rs                  # Tokio entry point and source namespaces
 │   ├── bootstrap.rs             # Configuration, providers, and lifecycle
+│   ├── config.rs                # Application environment settings
+│   ├── middlewares/             # Inbound tracing and timeout configuration
 │   ├── di.rs                    # Use-case dependency registration
-│   ├── routes.rs                # Router composition, prefixes, and middleware
-│   ├── openapi.rs               # API document selected by the host
+│   ├── routes.rs                # Host prefixes, middleware, and exposure
+│   ├── openapi.rs               # Host-selected OpenAPI document
 │   ├── server.rs                # Listener and graceful shutdown
-│   └── tests/                   # Host-level HTTP/gRPC integration tests
+│   ├── api/                     # HTTP handlers, schemas, mappers, and errors
+│   ├── internal/                # Item gRPC handlers, mappers, and bindings
+│   ├── state.rs                 # Injected ItemHandlers bundle
+│   ├── tests/                   # Mapper, middleware, and handler unit tests
+│   └── integration_tests.rs     # Registers private-host integration suites
+├── tests/host/                  # Host routes, Swagger, CRUD, and gRPC clients
 └── apps/
-    ├── shared/                  # Infrastructure interfaces and shared contracts
-    ├── domain/                  # Entities, invariants, and business behavior
-    ├── application/             # Command/query use cases
-    ├── infrastructure/          # Outbound adapters, rows, and SQL migrations
-    └── presentation/            # Reusable HTTP/gRPC endpoint definitions
+    ├── shared/                  # Infrastructure interfaces, errors, enums, constants
+    ├── domain/                  # Entities, invariants, models, and domain mappers
+    ├── application/             # Commands, queries, use cases, and input mappers
+    └── infrastructure/          # Outbound adapters, rows, mappers, and migrations
 ```
 
-The root `app` package is an executable and also owns the workspace. It is not a
-virtual workspace: Cargo needs a package with `src/main.rs` to build the binary.
-All four layer packages and shared are libraries. Dependencies are explicit:
+The root `app` package owns the executable and presentation. The four packages
+under `apps/` are libraries; there is no separate presentation package. The lint
+tool is a development workspace member. Dependencies remain explicit and acyclic:
 
 ```text
-presentation library -> application -> domain -> shared
-                    -> domain
+application          -> domain -> shared
 application          -> shared
 infrastructure       -> domain/shared
-
-root app -> presentation + application + domain + infrastructure + shared
+root app             -> application + domain + infrastructure + shared
 ```
 
-The root `app` package is the default workspace member.
-Cargo builds root `src/main.rs` as the `app` binary by convention, so an explicit
-`default-run` setting is unnecessary. Run `cargo run` from the workspace root to
-start the service. Use `--workspace` for checks and tests covering every layer.
+Root `app` is the default workspace member. `cargo run` builds `src/main.rs` as
+binary `app`; use `--workspace` to check or test every library and the lint tool.
 
-The domain depends only on `shared` and libraries for domain values.
-The application depends on the domain, shared contracts, and ordinary value
-libraries. Shared is the project's common interface layer: it declares the
-capabilities that infrastructure adapters implement. Infrastructure depends on
-shared contracts and domain entities, never application or presentation. Shared
-depends on no layer crate, so adapters remain replaceable without dependency
-cycles.
+Domain depends only on shared and value libraries. Application consumes domain
+behavior and shared infrastructure ports. Infrastructure implements those ports
+and may depend on domain/shared, never application or presentation. Shared has
+no layer dependencies. Associated types keep domain entities out of shared.
 
-Presentation depends directly on application and domain only among workspace
-packages. It consumes application handler types and domain values; shared
-contracts remain transitive implementation details of those APIs. It has no
-database, provider, Swagger UI, or host dependency. Cargo enforces this boundary
-because root app and presentation have separate manifests.
+Presentation consumes application/domain contracts and injected state. Keep
+shared, infrastructure, providers, and host configuration/registration imports
+out of `src/api/`, `src/internal/`, and `src/state.rs`. These are source-module
+boundaries within the root package, governed by the scoped instructions; Cargo
+still enforces the dependency direction between the four libraries.
 
-## Layer responsibilities and reasons for separation
+## Layer responsibilities
 
-| Package | Owns | Excludes | Why it is separate |
-| --- | --- | --- | --- |
-| [root app](src/AGENTS.md) | Runtime startup, configuration, DI, router/service selection and prefixes, OpenAPI assembly, Swagger UI, middleware, listener lifecycle | Business rules, persistence queries, endpoint mapping | Each executable chooses its deployment and exposure policy while reusing the layer libraries. |
-| [shared](apps/shared/AGENTS.md) | Infrastructure interfaces, shared errors, and genuinely shared constants/enums | Entities, workflows, DTOs, adapters, framework types | Use cases and providers agree on contracts without importing one another's implementations. |
-| [domain](apps/domain/AGENTS.md) | Entities, identity, invariants, and behavior | SQL, network calls, commands, DTOs, infrastructure interface definitions | Business rules remain valid regardless of transport or storage. |
-| [application](apps/application/AGENTS.md) | Commands, queries, use-case orchestration, and consumption of shared ports | HTTP/gRPC, persistence rows, provider SDKs | One workflow can serve multiple entry points and be tested with a port implementation in memory. |
-| [infrastructure](apps/infrastructure/AGENTS.md) | Database connections, migrations, persistence models, outbound adapters | Business policy, inbound handlers, use-case orchestration | A provider can change without changing domain behavior or transport contracts. |
-| [presentation](apps/presentation/AGENTS.md) | Relative API module routers, HTTP/gRPC endpoint definitions, health handlers, DTO mapping, operation metadata, status codes | Database/providers, host composition and prefixes, Swagger UI, environment configuration, listeners, business rules | Module routers can be reused by hosts with different exposure and development-tool policies. |
-
-Root `src/` is the composition root. `main.rs` starts Tokio and delegates to
-bootstrap. Bootstrap loads configuration and starts infrastructure; `di.rs`
-injects shared interfaces into use cases; `routes.rs` merges selected presentation
-API routers under `/api` and mounts gRPC services under `/internal`, plus Swagger
-UI and middleware. `server.rs` serves that router and drains connections.
-Bootstrap shuts down HiQLite when the server exits.
-
-## Module scope inside each package
-
-| Module/path | Responsibility | Reason for separation |
+| Package or source boundary | Owns | Excludes |
 | --- | --- | --- |
-| Root `src/main.rs` | Tokio entry point that calls bootstrap | The executable entry point stays small as modules are added. |
-| Root `src/bootstrap.rs` | Configuration, tracing, provider selection, and lifecycle | Deployment choices stay outside reusable API definitions. |
-| Root `src/di.rs` | Construct use cases and inject their dependencies | Registrations are easy to locate and replace without changing handlers. |
-| Root `src/routes.rs` | Merge API routers under `/api`, mount gRPC services under `/internal`, attach Swagger UI and middleware | The host explicitly controls what it exposes. |
-| Root `src/openapi.rs` | Assemble metadata for the host's selected operations | API publication and documentation policy stay with route selection. |
-| Root `src/server.rs` | HTTP/1 and HTTP/2 listener, signals, and connection draining | Network lifecycle stays independent of endpoint definitions. |
-| `shared/errors.rs` | Domain, repository, and application error contracts | Error categories stay independent of Axum, Tonic, and HiQLite. Each layer owns the meaning of its failures. |
-| `shared/ports/` | Provider-independent interfaces for infrastructure capabilities; the demo defines `ItemRepository` | A project can choose adapters without changing use cases. Associated types keep domain models out of shared dependencies. |
-| `domain/entities/item.rs` | Item identity, title normalization, and state changes | Only entity behavior can change protected state, so all callers observe the same invariants. |
-| `application/commands/` | One state-changing input and handler per operation | Each workflow has an explicit entry point and dependencies. |
-| `application/queries/` | One read-only input and handler per operation | Reads remain distinct from state changes without requiring separate storage systems. |
-| `infrastructure/adapters/hiqlite/database.rs` | Node startup, embedded migrations, database lifecycle | Connection management is independent of entity-specific SQL. |
-| `infrastructure/adapters/hiqlite/item_repository.rs` | SQL implementation of `ItemRepository` | Persistence details stay behind the port. |
-| `infrastructure/models/item.rs` | Private `ItemRow` database representation | Database column layout does not become the domain or API contract. |
-| `infrastructure/migrations/` | Embedded, ordered SQL schema changes | Schema evolution is versioned alongside its adapter. |
-| `presentation/api.rs` | Export HTTP handler, route, schema, and error namespaces | Root app can choose reusable module routers. |
-| `presentation/api/routes.rs` | Define relative health and Item routes | Endpoint paths and methods stay with presentation; the host adds prefixes. |
-| `presentation/api/handlers/item/` | Parse requests, invoke handlers, map responses | Transport validation and application orchestration have distinct owners. |
-| `presentation/api/schemas/item/` | JSON request and response DTOs | Public payloads can change without changing entities. |
-| `presentation/api/error.rs` | HTTP errors and mapping from application/domain failures | Transport-specific categories and statuses stay outside shared contracts. |
-| `presentation/state.rs` | Public `ItemHandlers` bundle for injected HTTP/gRPC use cases | Transport adapters receive ready-to-use handlers without knowing providers or registration logic. |
-| `presentation/internal/service.rs` | Tonic service state and generated server construction | gRPC wiring is separate from individual RPCs. |
-| `presentation/internal/handlers/item.rs` and `item/` | Dispatch generated RPC methods and map each operation | Generated service signatures do not spread into application code. |
-| `presentation/internal/mapping.rs` and `error.rs` | Protobuf output and gRPC status mapping | Protocol-specific representations remain local to Tonic. |
-| `presentation/internal/pb/` | Wrappers around generated, versioned bindings | Generated wire types stay separate from handwritten logic. |
-| `proto/<module>/v<major>/` | Source Protobuf contracts | Clients share an explicit versioned contract without depending on the Rust implementation. |
-| Root and each library's `src/tests/` | Tests at the owning boundary | The host tests route composition; library tests isolate their behavior. |
+| [Root host modules](src/AGENTS.md) | Startup, configuration, DI, route/service selection, prefixes, OpenAPI assembly, Swagger UI, middleware, listeners | Business rules, persistence queries, endpoint conversion |
+| [Shared](apps/shared/AGENTS.md) | Provider-independent ports, one service error enum, every enum and named constant | Entities, workflows, DTOs, adapters, framework types |
+| [Domain](apps/domain/AGENTS.md) | Entities, identity, invariants, behavior, domain snapshots and their mappers | SQL, network calls, commands, DTOs, provider implementations |
+| [Application](apps/application/AGENTS.md) | Command/query inputs, orchestration, shared port consumption, application mappers | HTTP/gRPC, persistence rows, provider SDKs, duplicated business rules |
+| [Infrastructure](apps/infrastructure/AGENTS.md) | Connections, migrations, persistence/provider models, adapters and their mappers | Business policy, inbound handlers, use-case orchestration |
+| [Root presentation modules](src/api/AGENTS.md) | Relative routes, HTTP/gRPC handlers, schemas, transport mapping, operation metadata | Providers, host prefixes, Swagger UI, environment configuration, listeners, business rules |
 
-The following infrastructure namespaces are documented extension points, not
-implemented features. Add a provider only after defining a use case and its port:
+`main.rs` starts Tokio and delegates to bootstrap. HiQLite first loads `.env`;
+bootstrap loads `AppConfig`, initializes tracing and the database, then registers
+use cases in `di.rs`. `routes.rs` mounts relative REST routers under `/api`, the
+existing Item gRPC service under `/internal`, and optional documentation routes.
+`middlewares/request.rs` applies tracing and the five-second timeout.
+`server.rs` serves HTTP/1 and HTTP/2, handles signals, and drains connections;
+bootstrap shuts the database down when serving exits. Routers and servers receive
+application settings rather than reading the process environment.
 
-| Namespace | Scope and reason for separation |
+The template retains its existing Item v1 gRPC demonstration. Add further internal
+services only for explicitly requested caller-to-receiver interactions; do not
+automatically mirror new REST operations.
+
+## Module scope
+
+| Module/path | Responsibility and reason for separation |
 | --- | --- |
-| `adapters/cache` | Cache connectivity, serialization, and keys; the calling layer owns TTL policy. Keeps cache mechanics out of business rules. |
-| `clients/internal_service` | Calls to other services under your control; isolates service contracts, credentials, timeouts, and transport errors. |
-| `clients/third_party` | External vendor clients; isolates vendor SDKs, authentication, rate limits, and response models. |
-| `messaging/broker` | Broker connections and lifecycle; reusable independently of a particular publication. |
-| `messaging/producer` | Outbound publication, routing, headers, and retries; the application owns message meaning and workflow. |
-| `messaging/protocol` | Transport envelopes and encoding; wire compatibility stays separate from domain events. |
-| `notifications/email` and `notifications/sms` | Provider-specific delivery; recipient, timing, and business content belong to the use case. |
-| `interceptors` | Technical cross-cutting behavior for outbound integrations; domain decisions never belong in middleware. Inbound middleware stays in presentation. |
+| `shared/errors.rs` | One `Error` enum propagated through all layers; statuses remain transport-owned. |
+| `shared/ports/item_repository.rs` | Provider-independent Item persistence contract with associated `Entity`. |
+| `domain/entities/item.rs` | Private entity fields, title normalization, validated construction, and rename behavior. |
+| `domain/models/item_snapshot.rs` | Domain-owned public projection used by actual representation conversions. |
+| `domain/mappers/item.rs` | Entity ↔ snapshot conversion; reconstruction invokes validated entity construction. |
+| `application/commands/` and `queries/` | One input and constructor-injected handler per operation, exposing `execute`. |
+| `application/mappers/item.rs` | Create input ↔ entity conversion with explicit caller-provided identity and timestamp. |
+| `infrastructure/adapters/hiqlite/database.rs` | Node startup, embedded migrations, cleanup, and lifecycle. |
+| `infrastructure/adapters/hiqlite/item_repository.rs` | Bound SQL queries, missing-write semantics, and repository operations. |
+| Infrastructure provider/capability `mappers/` directories | Persistence/provider ↔ domain conversions and provider error translation. |
+| `infrastructure/models/item.rs` | Private relational `ItemRow`; storage representation stays separate from entities. |
+| `infrastructure/migrations/` | Ordered, embedded SQL schema changes. |
+| `src/api/routes.rs` | Relative health and Item paths/methods; the host adds `/api`. |
+| `src/api/handlers/item/` | Extract input, invoke mappers and use cases, and return mapped responses. |
+| `src/api/schemas/item/` | One JSON request or response DTO per file; declarations and metadata only. |
+| `src/api/mappers/item.rs` | REST schemas ↔ command/query inputs and domain results. |
+| `src/api/error.rs` | Transparent `ApiError` wrapper, exhaustive HTTP mapping, public responses, private logging. |
+| `src/state.rs` | Cloneable injected use-case bundle shared by REST and gRPC, without provider registration. |
+| `src/internal/service.rs` | Tonic service state and generated server construction. |
+| `src/internal/handlers/item.rs` and `item/` | Generated trait dispatcher and per-operation RPC handlers. |
+| `src/internal/mappers/` | Protobuf conversions and exhaustive gRPC status mapping. |
+| `src/internal/pb/item/v1.rs` | Versioned wrapper around bindings generated by root `build.rs`. |
+| `proto/<module>/v<major>/` | Versioned wire contracts that clients can share independently. |
+| Root and library `src/tests/` | Unit tests at the owning boundary; no full host workflows in root unit tests. |
+| `tests/host/` | Host integration suites, registered through `src/integration_tests.rs` to access private host modules. |
 
-A queue consumer or scheduled listener is an inbound adapter: place it in
-presentation so it can invoke application use cases. Infrastructure owns outbound
-connections and producers, not listeners that drive the application.
+Additional infrastructure namespaces are extension points, not implemented
+integrations. Add a provider only after a real use case requires its port:
+
+| Namespace | Scope |
+| --- | --- |
+| `adapters/cache` | Connections, serialization, keys, and technical retries; the caller owns TTL policy. |
+| `clients/internal_service` | Outbound internal contracts, credentials, deadlines, and transport errors. |
+| `clients/third_party` | Vendor clients, SDKs, authentication, rate limits, and response models. |
+| `messaging/broker` | Broker connection and lifecycle. |
+| `messaging/producer` | Outbound publication, routing, headers, and retries; application owns message meaning. |
+| `messaging/protocol` | Envelopes, encoding, and wire compatibility. |
+| `notifications/email` and `sms` | Delivery mechanisms; application owns recipients, timing, and business content. |
+| `interceptors` | Technical cross-cutting outbound integration behavior. |
+
+Queue consumers and scheduled listeners are inbound adapters that invoke use
+cases, so they belong in presentation. Infrastructure owns outbound mechanisms.
 
 ## Entity, persistence model, DTO, and use-case input
 
-These types are intentionally distinct:
-
 | Type | Example | Boundary |
 | --- | --- | --- |
-| Domain entity | `Item` | Protected identity, title, and creation time; no serialization contract |
-| Persistence model | `ItemRow` | Private database row, mapped to a valid entity by the repository |
+| Domain entity | `Item` | Protected identity, title, creation time, and invariants |
+| Domain business model | `ItemSnapshot` | Domain projection with validated reconstruction, without a wire contract |
+| Persistence model | `ItemRow` | Private database row mapped through infrastructure mappers |
 | REST DTO | `CreateItemRequest`, `ItemView` | JSON contract only |
 | Protobuf DTO | `pb::item::v1::ItemReply` | Generated wire contract only |
-| Command/query | `UpdateItemCommand`, `GetItemQuery` | Application input, independent of either transport |
-| Schema | Migration SQL or `.proto` | Stored or exchanged data structure; not a runtime layer |
+| Command/query | `UpdateItemCommand`, `GetItemQuery` | Application input independent of transport |
+| Schema | Migration SQL or `.proto` | Stored or exchanged structure |
 
-The demo Item has a UUID, a trimmed nonblank title, and a creation timestamp in
-Unix milliseconds. Changing its title preserves identity and creation time.
-UUID and timestamp generation are application concerns here. Add value objects,
-domain services, or domain events when actual business behavior requires them.
+Item has a UUID, a trimmed nonblank title, and a creation time in Unix
+milliseconds. Rename preserves identity and creation time. UUID/time allocation
+belongs to application. Add domain services, events, or value objects when actual
+business behavior needs them.
 
 ## Item request flow
 
 ```text
 POST /api/items or /internal/item.v1.ItemInternal/CreateItem
   -> presentation request DTO
+  -> presentation mapper
   -> CreateItemCommand
   -> CreateItemHandler::execute
-  -> Item::new (enforce invariants)
+  -> application mapper with allocated UUID/time
+  -> validated domain construction
   -> ItemRepository::save
-  -> HiqliteItemRepository (SQL and ItemRow mapping)
+  -> HiqliteItemRepository and persistence mapper
   -> Item
+  -> presentation response mapper
   -> ItemView or ItemReply
 ```
 
-Read, update, and delete follow the same direction through their own handlers.
-Updates load the entity and invoke its behavior before saving. Repository update
-and delete operations report missing records, including deletion between a read
-and a write. Bulk deletion ignores missing IDs and accepts an empty list. List
-results are ordered by creation time and UUID in the HiQLite adapter. The demo
-uses last-write-wins title updates; add version checks when a workflow needs
-optimistic concurrency control. Listing is unpaginated for this small example.
+Read, update, and delete use their own handlers. Update loads an entity and invokes
+rename before persistence. Missing updates/deletes remain not-found outcomes,
+including deletion between read and write. Bulk deletion ignores absent IDs and
+accepts an empty list. List is ordered by creation time and UUID. Updates use
+last-write-wins; add optimistic revisions when a real workflow requires them.
 
 ## Ports, errors, and transport concerns
 
-Infrastructure interfaces (ports) are centralized in `shared/ports/`, grouped by
-capability. Define a port when a real use case requires a repository, cache,
-message publisher, notification sender, service client, or clock. Infrastructure
-implements the contract using the provider selected for the project. Domain and
-application retain ownership of business behavior and workflow policy.
-
-Shared must not depend on domain or application. When a port exchanges domain
-values, express their type through an associated type or generic parameter.
-`ItemRepository` declares `type Entity: Send + Sync`; the HiQLite adapter binds
-`type Entity = domain::Item`, and Item use cases require that same association.
-This keeps the entity and its invariants in domain without a dependency cycle.
-
-The composition root selects the implementation once and injects it through the
-shared interface:
+Infrastructure interfaces live in `shared/ports/`, grouped by capability. Shared
+uses associated types or generic parameters for domain values and never imports
+domain/application. The Item adapter binds `ItemRepository::Entity = domain::Item`.
+The composition root selects a provider once and injects it:
 
 ```rust
 let repository: Arc<dyn ItemRepository<Entity = Item>> =
@@ -195,72 +187,80 @@ let repository: Arc<dyn ItemRepository<Entity = Item>> =
 let get_items = GetItemsHandler::new(Arc::clone(&repository));
 ```
 
-Use cases accept constructor-injected dependencies and support both concrete
-repository types and trait objects. Calls through the trait object reach the
-injected implementation; Rust does not discover or select a provider on its own.
-Provider factories and registrations stay in the composition root, not shared.
-Shared owns interfaces, not a global service locator. Adapters must not expose
-SQL, SDK types, or provider payloads across these contracts.
+Use cases support concrete repositories and trait objects through `Arc<R>` with
+`?Sized` bounds. Shared owns contracts rather than provider factories or global
+service locators. SQL, provider SDKs, and persistence models stay behind ports.
 
-Provider errors become `RepositoryError` or another port-specific error.
-Application errors express validation, missing resources, and port failures.
-Presentation maps them to HTTP responses or `tonic::Status`; provider details are
-logged internally rather than returned to clients. The local HTTP error type
-implements Axum's `IntoResponse` and consumes application/domain errors without
-importing shared or bringing Axum into its contracts.
+Every runtime service failure is a variant of `shared::Error` in
+`apps/shared/src/errors.rs`; domain and application re-export it. All layers
+propagate it without layer-specific error enums or wrappers. `EmptyTitle`,
+`InvalidId`, `NotFound`, and `Unexpected` describe outcomes. Unexpected failures
+preserve private diagnostics. Build tooling may use its own diagnostic contracts.
 
-Tracing, request IDs, authentication propagation, deadlines, and technical retries
-belong at transport/integration boundaries. They must not decide domain outcomes
-or duplicate entity invariants.
+Presentation exhaustively maps each variant without a catch-all arm. HTTP uses a
+transparent response newtype in `src/api/error.rs`; gRPC maps statuses under
+`src/internal/mappers/errors.rs`. Validation uses HTTP 400 / `InvalidArgument`,
+missing records use 404 / `NotFound`, and unexpected failures use 500 / `Internal`
+with `internal server error`. Provider details are logged privately.
+`cargo lint --errors-only` audits these contracts independently.
 
-## File and contract conventions
+## File and mapper conventions
 
-- Use `<module>.rs` with a same-named folder for child modules; never `mod.rs`.
-- Group entities, handlers, DTOs, and contracts by business module such as `item`.
-  Infrastructure may group first by technical provider, then by business module.
-- Keep command/query input and its handler together. Every handler exposes
-  `execute`, receives dependencies in its constructor, and does not call another
-  handler. Do not aggregate unrelated workflows into an `ItemService` or a base
-  handler framework.
-- Namespace files declare modules and re-exports. The gRPC module dispatcher is
-  the explicit exception required to implement the generated service trait.
-- Avoid catch-all `utils`, `common`, or `helpers` modules. Name types by purpose,
-  for example `ItemRow` for storage rather than a second `Item`.
-- Keep Protobuf source at `proto/<module>/v<major>/<schema>.proto`, with matching
-  package `<module>.v<major>` and Rust wrapper path. Build bindings in
-  `apps/presentation/build.rs` into `OUT_DIR`; do not commit generated Rust.
-- Preserve released field numbers, message semantics, and RPC paths. Use a new
-  major version for breaking changes and keep the old contract during migration.
-  See [Protobuf rules](proto/AGENTS.md) for compatibility details.
+- Define every enum and named constant under `apps/shared/src/`, including test
+  and associated constants. Use generic enum payloads for layer-owned types;
+  keep entities, DTOs, workflows, and business validation in their owning layers.
+- Keep `.rs` files free of line, block, and documentation comments. Bind struct
+  literals to local variables before passing them as function arguments.
+- Follow the [mapper ownership rules](apps/AGENTS.md#mappers). Put conversions in
+  capability-specific physical `mappers/` directories; `mappers.rs` only declares
+  modules and re-exports. Handlers and adapters delegate representation changes.
+- Place mappers in a layer allowed to depend on both types. Implement required
+  reverse conversions; require explicit context for missing data or return a
+  defined error. Do not silently invent values or claim a lossy mapping is reversible.
+- Presentation owns schemas ↔ commands/queries and response/domain conversions;
+  application owns its inputs ↔ domain values; domain owns entity ↔ business-model
+  projections; infrastructure owns persistence/provider ↔ domain conversions.
+  Shared only maps its own contracts and foundational values without outward imports.
+- Mappers only change representation. Domain owns business rules and validation;
+  use cases own allocation, ports, and orchestration; adapters own provider I/O.
+- Use `<module>.rs` and same-named child folders, never `mod.rs`. Namespace files
+  declare modules and re-exports, except the generated service trait dispatcher.
+- Keep each command/query input with its handler. Do not call handlers from other
+  handlers or introduce a generic handler framework or catch-all helper modules.
+- Group handlers, DTOs, entities, and contracts by business capability. Keep each
+  request, response, query, and nested REST DTO in a separate file.
+- Keep `.proto` source under `proto/<module>/v<major>/` with matching package and
+  wrapper. Root `build.rs` generates into `OUT_DIR`. Preserve released field
+  numbers, semantics, and RPC paths; see [Protobuf rules](proto/AGENTS.md).
 
 ## Extending and verifying the template
 
-Start with a business capability: define its entity behavior in domain and the
-required infrastructure interfaces in shared, add command/query handlers,
-implement adapters, and define transport handlers. Register dependencies in root
-`src/di.rs`, define relative API module routers in presentation, then merge selected
-routers and update OpenAPI in the root app. Add a new namespace consistently
-across affected layers.
-Separate independently deployed services into their own composition roots and
-contracts when required; the current workspace builds one service.
+Start with business behavior in domain and required ports in shared. Add
+application use cases, infrastructure adapters and mappers, and thin transport
+handlers. Register dependencies in `src/di.rs`, select routes in `src/routes.rs`,
+and update host OpenAPI. Add internal protocols only for an actual interaction.
+Keep business invariants and provider behavior tested in their owning libraries.
 
-Tests belong to the layer whose behavior they verify:
+Root `src/tests/` holds mapper, middleware, and handler contract unit tests with
+controlled inputs/results. Root `tests/host/` holds mounted HTTP workflows,
+Swagger gating, and generated gRPC clients. `src/integration_tests.rs` registers
+those suites in the binary test harness without exposing private production
+modules. Provider tests use isolated temporary HiQLite nodes and clean shutdown.
 
-- Domain: constructors, invariants, state changes, and identity preservation.
-- Application: workflows with an in-memory repository or another test double.
-- Infrastructure: migrations, persistence, and adapter semantics with real HiQLite.
-- Presentation: DTO mapping and HTTP/gRPC error behavior.
-- Root app: mounted routes, serialization, Swagger gating, and generated gRPC
-  client behavior through the host's listener and injected dependencies.
-
-Run these checks from the workspace root before completing a change:
+Run from the workspace root:
 
 ```bash
 cargo fmt --all -- --check
 cargo check --workspace --locked --all-targets
 cargo test --workspace --locked --all-targets
 cargo clippy --workspace --locked --all-targets -- -D warnings
+cargo lint
 ```
+
+`cargo lint` reports Rust comments, misplaced representation mappings, inline
+struct arguments, noncanonical error contracts, and enum/constant ownership,
+then runs workspace Clippy. It never rewrites source. The lint tool's own tests
+exercise rejected and accepted patterns, including mapper namespace placement.
 
 ## Running the Item demo
 
@@ -330,10 +330,16 @@ With `DEBUG=true`, Swagger UI remains at `/docs/swagger/` and the document at
 
 The host mounts generated gRPC services under `/internal`. Clients must include
 that prefix before the generated service/method path. For a generated Tonic client,
-set its origin explicitly:
+generate bindings from `proto/item/v1/item.proto` in the client project, then
+set its origin explicitly. The root service is a binary; clients share the
+Protobuf contract rather than depending on a presentation crate:
 
 ```rust
-use presentation::internal::pb::item::v1::{
+mod item {
+    tonic::include_proto!("item.v1");
+}
+
+use item::{
     CreateItemRequest,
     item_internal_client::ItemInternalClient,
 };
@@ -343,8 +349,9 @@ let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:13000")
     .await?;
 let origin = "http://127.0.0.1:13000/internal".parse()?;
 let mut client = ItemInternalClient::with_origin(channel, origin);
+let request = CreateItemRequest { title: "First gRPC item".into() };
 let item = client
-    .create_item(CreateItemRequest { title: "First gRPC item".into() })
+    .create_item(request)
     .await?
     .into_inner();
 ```

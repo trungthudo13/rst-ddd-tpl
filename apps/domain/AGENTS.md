@@ -9,7 +9,7 @@ rules independent of transport and storage ensures that HTTP, gRPC, and future
 entry points enforce the same behavior. Infrastructure interfaces are centralized
 in shared rather than declared in domain.
 
-The demo entity is `entities/item.rs`. `DomainError` is a shared contract
+The demo entity is `entities/item.rs`. `Error` is a shared contract
 re-exported by domain. `shared::ItemRepository` exchanges an associated entity
 type, which its consumers bind to `Item`. Add value objects, domain services,
 and domain events only when actual business behavior requires them.
@@ -25,6 +25,19 @@ and domain events only when actual business behavior requires them.
   change must leave the entity valid and unchanged.
 - Do not declare infrastructure interfaces or implementations in domain. Use
   shared contracts when a domain capability actually requires an external port.
+
+## Mappers
+
+- Create explicit capability-specific mappers under `src/mappers/` for entity ↔
+  business-model and domain-value conversions, including both directions.
+- Domain services must delegate representation conversion to these mappers while
+  retaining ownership of business rules and business validation. Reconstructed
+  entities must pass through validated domain construction.
+- Domain mappers may use only domain-owned types, shared contracts, and allowed
+  value libraries. Schemas and commands/queries belong to outer layers; their
+  mappings must not introduce application, presentation, or infrastructure imports.
+- Require explicit context for missing reverse-mapping data. Test both directions,
+  value preservation, and rejected conversions.
 
 ## Logic placement
 

@@ -9,8 +9,9 @@ use application::{
     UpdateItemHandler,
 };
 use domain::Item;
-use presentation::ItemHandlers;
 use shared::ItemRepository;
+
+use crate::ItemHandlers;
 
 pub(crate) fn item_handlers(repository: Arc<dyn ItemRepository<Entity = Item>>) -> ItemHandlers {
     ItemHandlers {

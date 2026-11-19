@@ -11,8 +11,8 @@ use hiqlite::{
     Params,
 };
 use shared::{
+    Error,
     ItemRepository,
-    RepositoryError,
 };
 use tempfile::tempdir;
 use uuid::Uuid;
@@ -23,7 +23,6 @@ use crate::{
 };
 
 fn config(data_dir: String) -> NodeConfig {
-    // Keep both reservations alive until the addresses have been selected.
     let raft = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let api = TcpListener::bind(("127.0.0.1", 0)).unwrap();
     NodeConfig {
@@ -107,11 +106,11 @@ async fn hiqlite_repository_crud_respects_missing_records() {
     assert_eq!(repository.find(item.id()).await.unwrap(), None);
     assert!(matches!(
         repository.update(&updated).await,
-        Err(RepositoryError::NotFound(id)) if id == item.id()
+        Err(Error::NotFound(id)) if id == item.id()
     ));
     assert!(matches!(
         repository.delete(item.id()).await,
-        Err(RepositoryError::NotFound(id)) if id == item.id()
+        Err(Error::NotFound(id)) if id == item.id()
     ));
     assert_eq!(repository.find(item.id()).await.unwrap(), None);
 

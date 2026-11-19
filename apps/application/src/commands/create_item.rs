@@ -8,10 +8,12 @@ use std::{
 
 use domain::Item;
 use shared::{
-    ApplicationError,
+    Error,
     ItemRepository,
 };
 use uuid::Uuid;
+
+use crate::mappers::item;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateItemCommand {
@@ -42,12 +44,12 @@ impl<R: ItemRepository<Entity = Item> + ?Sized> CreateItemHandler<R> {
     pub async fn execute(
         &self,
         command: CreateItemCommand,
-    ) -> Result<Item, ApplicationError> {
+    ) -> Result<Item, Error> {
         let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|duration| duration.as_millis() as i64)
             .unwrap_or_default();
-        let item = Item::new(Uuid::new_v4(), command.title, created_at)?;
+        let item = item::from_create(command, Uuid::new_v4(), created_at)?;
         self.repository.save(&item).await?;
         Ok(item)
     }

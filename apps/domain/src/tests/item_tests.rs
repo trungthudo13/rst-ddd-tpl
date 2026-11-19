@@ -1,7 +1,7 @@
 use uuid::Uuid;
 
 use crate::{
-    DomainError,
+    Error,
     Item,
 };
 
@@ -11,7 +11,7 @@ fn trims_title_and_rejects_blank_titles() {
     assert_eq!(item.title(), "first item");
     assert_eq!(
         Item::new(Uuid::new_v4(), "   ".into(), 1),
-        Err(DomainError::EmptyTitle)
+        Err(Error::EmptyTitle)
     );
 }
 
@@ -32,6 +32,6 @@ fn rejected_rename_keeps_the_existing_state() {
     let mut item = Item::new(Uuid::new_v4(), "original".into(), 1).unwrap();
     let original = item.clone();
 
-    assert_eq!(item.rename(" \t\n".into()), Err(DomainError::EmptyTitle));
+    assert_eq!(item.rename(" \t\n".into()), Err(Error::EmptyTitle));
     assert_eq!(item, original);
 }

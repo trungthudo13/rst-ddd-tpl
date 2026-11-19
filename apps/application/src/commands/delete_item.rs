@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use domain::Item;
 use shared::{
-    ApplicationError,
+    Error,
     ItemRepository,
 };
 use uuid::Uuid;
@@ -36,7 +36,7 @@ impl<R: ItemRepository<Entity = Item> + ?Sized> DeleteItemHandler<R> {
     pub async fn execute(
         &self,
         command: DeleteItemCommand,
-    ) -> Result<(), ApplicationError> {
+    ) -> Result<(), Error> {
         self.repository.delete(command.id).await?;
         Ok(())
     }

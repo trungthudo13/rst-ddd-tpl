@@ -1,4 +1,6 @@
-use presentation::api::{
+use utoipa::OpenApi;
+
+use crate::api::{
     handlers,
     schemas::{
         ErrorView,
@@ -10,7 +12,6 @@ use presentation::api::{
         },
     },
 };
-use utoipa::OpenApi;
 
 #[derive(OpenApi)]
 #[openapi(

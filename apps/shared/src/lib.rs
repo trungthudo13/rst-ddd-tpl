@@ -1,9 +1,5 @@
 pub mod errors;
 pub mod ports;
 
-pub use errors::{
-    ApplicationError,
-    DomainError,
-    RepositoryError,
-};
+pub use errors::Error;
 pub use ports::ItemRepository;

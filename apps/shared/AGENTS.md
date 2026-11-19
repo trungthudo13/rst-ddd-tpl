@@ -5,13 +5,13 @@ Applies to `apps/shared/`.
 ## Responsibility and rationale
 
 Own the project's provider-independent contracts: infrastructure interfaces,
-shared errors, and genuinely shared constants/enums. This is the common contract
-layer that use cases consume and concrete adapters implement. Projects can replace
+shared errors, and all enum and named constant definitions. This is the common
+contract layer that use cases consume and concrete adapters implement. Projects can replace
 an adapter without changing its consumers or exposing a provider SDK to them.
 
-`DomainError`, `RepositoryError`, and `ApplicationError` are centralized here.
-Their meanings still belong to their respective layers. Transport-specific
-errors and statuses belong to presentation and are not shared contracts.
+`Error` in `src/errors.rs` is the single runtime service error enum. Ports,
+domain behavior, and application use cases propagate it unchanged. Application
+and domain re-export it; transport statuses remain presentation-owned.
 
 ## Boundaries
 
@@ -29,12 +29,28 @@ errors and statuses belong to presentation and are not shared contracts.
 - Keep provider detail out of client-facing error mappings.
 - Presentation maps the errors exposed by application/domain into its own
   transport errors; it does not import shared directly.
-- Map a missing repository record to an application not-found error; preserve
-  backend failures as repository errors for boundary-level logging and mapping.
+- Preserve optional missing records as `None`; required missing records use
+  `Error::NotFound`. Unexpected provider failures use `Error::Unexpected` with
+  private diagnostics for safe boundary-level logging and response mapping.
+- Define every enum and named constant here, including test and associated
+  constants. Use generic payloads for layer-owned types. Keep entities, DTOs,
+  workflows, and business validation in their owning layers.
+
+## Mappers
+
+- Define explicit `mappers/` modules for conversions between shared-owned
+  contracts/values and foundational types, including both required directions.
+- Keep schema ↔ command/query mappings in presentation, command/query ↔
+  entity/business-model mappings in application, and domain conversions in domain.
+  Shared mappers must never import those layers or become a cross-layer registry.
+- Express domain values in ports through associated types or generic parameters;
+  concrete conversion remains with the consuming or implementing layer. Test
+  shared mappings for value preservation and conversion errors.
 
 ## Definition of done
 
 Every infrastructure interface has an actual consumer and implementation (or a
-test double). Shared values/helpers need real reuse. Contracts introduce no
+test double). Enums and constants follow the shared-only ownership rule; other
+shared values/helpers need real reuse. Contracts introduce no
 outward dependency, support injection without provider types, and preserve tested
 error semantics. Run the workspace checks in `apps/AGENTS.md`.
