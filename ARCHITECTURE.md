@@ -381,7 +381,9 @@ The Dockerfile separates dependency compilation from application source:
    real Protobuf generation runs even if the consumer matches the recipe's
    placeholder package version.
 4. `build` copies the real source over the recipe skeleton and compiles the root
-   `app` binary with the same release settings and symbols stripped.
+   `app` binary with the same release settings and symbols stripped. By default
+   it inherits the local `builder` stage; `BUILDER_IMAGE` can select a published
+   builder instead, retaining its toolchain, release settings, and dependencies.
 5. `base` provides an internal Distroless C/C++ runtime stage, HiQLite defaults,
    writable storage at `/data`, UID/GID `65532:65532`, and the `/app/app` entrypoint.
    It can be built independently of the Rust build stages and contains no
@@ -446,11 +448,15 @@ builder, override it with `docker build --build-arg CARGO_BUILD_JOBS=4 -t app:lo
 
 ### Publishing and reusing images
 
-`.github/workflows/publish-image.yml` runs when a Git tag is pushed. It builds
-the `builder` and `runtime` targets for `linux/amd64` and `linux/arm64`, publishing
-to `ghcr.io/<owner>/<repository>` using the workflow's `GITHUB_TOKEN`. The repository
-name follows the current GitHub repository, so forks publish to their own path.
-No additional registry credentials are required.
+`.github/workflows/publish-image.yml` runs when a Git tag is pushed. It uses
+`ubuntu-24.04` for native amd64 builds and `ubuntu-24.04-arm` for native arm64
+builds, with four Cargo jobs and separate architecture caches. QEMU is not needed.
+Each runner first pushes its `builder` by digest, then uses that exact image to
+compile the runnable service, so dependencies compile once per architecture.
+After both runners succeed, the publication jobs assemble their digests into
+multi-architecture tags at `ghcr.io/<owner>/<repository>` using `GITHUB_TOKEN`.
+Forks publish to their own repository path; no additional registry credentials
+are required.
 
 For a tag such as `v1.0.1`, the published images are:
 

@@ -1,5 +1,7 @@
 # syntax=docker/dockerfile:1
 
+ARG BUILDER_IMAGE=builder
+
 FROM rust:1-slim-trixie AS toolchain
 
 RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.list.d/debian.sources \
@@ -35,7 +37,7 @@ RUN cargo chef cook --locked --release --package app --bin app --recipe-path rec
 # Remove the dummy build script using Cargo's current artifact layout.
 RUN cargo clean --release --package app
 
-FROM builder AS build
+FROM ${BUILDER_IMAGE} AS build
 
 COPY . .
 RUN cargo build --locked --release --package app --bin app \
