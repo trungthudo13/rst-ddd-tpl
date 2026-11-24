@@ -14,6 +14,7 @@ your own business modules and services.
 See [Architecture](ARCHITECTURE.md) for module responsibilities, separation
 rationale, and instructions to run and adapt the template.
 
-Tag pushes publish the runnable demo and a reusable runtime base to GitHub
-Container Registry. See [image publishing and reuse](ARCHITECTURE.md#publishing-and-reusing-images)
+Tag pushes publish the runnable demo and a Rust builder with compiled
+dependencies to GitHub Container Registry, including `latest` and `builder-latest`.
+See [image publishing and reuse](ARCHITECTURE.md#publishing-and-reusing-images)
 for release commands and downstream Dockerfiles.

@@ -9,24 +9,36 @@ RUN sed -i 's|http://deb.debian.org|https://deb.debian.org|g' /etc/apt/sources.l
 
 WORKDIR /build
 
-# Install the toolchain pinned by the repository before copying changing source.
-COPY rust-toolchain.toml ./
-RUN rustc --version && cargo --version
-
-FROM toolchain AS build
-
 ARG CARGO_BUILD_JOBS=1
-ENV CARGO_INCREMENTAL=0 \
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
+    CARGO_INCREMENTAL=0 \
     CARGO_PROFILE_RELEASE_DEBUG=0 \
     CARGO_PROFILE_RELEASE_STRIP=symbols
 
-COPY . .
+# Install the toolchain pinned by the repository before copying changing source.
+COPY rust-toolchain.toml ./
+RUN rustc --version && cargo --version \
+    && cargo install cargo-chef --version 0.1.78 --locked
 
-# Keep downloaded crates and compiled dependencies in BuildKit's cache only.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/build/target,sharing=locked \
-    cargo build --locked --release --package app --bin app --jobs "${CARGO_BUILD_JOBS}" \
+FROM toolchain AS planner
+
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM toolchain AS builder
+
+COPY --from=planner /build/recipe.json ./recipe.json
+
+# Store downloads and compiled dependencies in image layers for downstream builds.
+RUN cargo chef cook --locked --release --package app --bin app --recipe-path recipe.json
+
+# Remove the dummy build script using Cargo's current artifact layout.
+RUN cargo clean --release --package app
+
+FROM builder AS build
+
+COPY . .
+RUN cargo build --locked --release --package app --bin app \
     && install -Dm755 target/release/app /out/app
 
 FROM gcr.io/distroless/cc-debian13:nonroot AS base

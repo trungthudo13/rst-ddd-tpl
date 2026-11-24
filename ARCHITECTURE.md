@@ -368,19 +368,28 @@ the generated Tonic client over the combined HTTP/gRPC listener.
 
 ## Container image
 
-The Dockerfile uses four stages:
+The Dockerfile separates dependency compilation from application source:
 
 1. `toolchain` installs native build dependencies and the Rust version pinned in
-   `rust-toolchain.toml`.
-2. `build` compiles the root `app` binary in release mode with symbols stripped.
-   BuildKit cache mounts retain downloaded crates and compiled dependencies for
-   subsequent builds.
-3. `base` provides a Distroless C/C++ runtime, HiQLite defaults, writable storage
-   at `/data`, UID/GID `65532:65532`, and the `/app/app` entrypoint. It can be built
-   independently of the Rust build stages and contains no application binary.
-4. `runtime` extends `base` with the compiled demo binary at `/app/app`.
+   `rust-toolchain.toml`, plus the pinned cargo-chef version.
+2. `planner` extracts a cargo-chef recipe from the workspace manifests and lockfile.
+3. `builder` cooks that recipe in release mode. Cargo downloads under
+   `/usr/local/cargo` and compiled dependencies under `/build/target` remain in
+   image layers, so downstream builds inherit them after pulling the image.
+   These directories do not use BuildKit cache mounts. Cargo then removes the
+   dummy app and build script, preserving dependency artifacts while ensuring
+   real Protobuf generation runs even if the consumer matches the recipe's
+   placeholder package version.
+4. `build` copies the real source over the recipe skeleton and compiles the root
+   `app` binary with the same release settings and symbols stripped.
+5. `base` provides an internal Distroless C/C++ runtime stage, HiQLite defaults,
+   writable storage at `/data`, UID/GID `65532:65532`, and the `/app/app` entrypoint.
+   It can be built independently of the Rust build stages and contains no
+   application binary.
+6. `runtime` extends `base` with the compiled demo binary at `/app/app`.
 
-Both runtime images contain no source, Cargo, compiler, or shell.
+The runtime contains no source, Cargo, compiler, or shell. The internal `base`
+stage is not published as a separate image.
 
 SQL migrations, generated Protobuf bindings, and Swagger assets are embedded at
 build time. Local env files, database state, Git history, and host build artifacts
@@ -390,7 +399,7 @@ Build with Docker and the Buildx/BuildKit component:
 
 ```bash
 docker build -t app:local .
-docker build --target base -t app:base .
+docker build --target builder -t app:builder .
 ```
 
 The Dockerfile defines all HiQLite settings used by the demo as single-node
@@ -438,41 +447,65 @@ builder, override it with `docker build --build-arg CARGO_BUILD_JOBS=4 -t app:lo
 ### Publishing and reusing images
 
 `.github/workflows/publish-image.yml` runs when a Git tag is pushed. It builds
-both Dockerfile targets for `linux/amd64` and `linux/arm64` and publishes to
-`ghcr.io/<owner>/<repository>` using the workflow's `GITHUB_TOKEN`. The repository
+the `builder` and `runtime` targets for `linux/amd64` and `linux/arm64`, publishing
+to `ghcr.io/<owner>/<repository>` using the workflow's `GITHUB_TOKEN`. The repository
 name follows the current GitHub repository, so forks publish to their own path.
 No additional registry credentials are required.
 
-For a tag such as `v1.0.0`, the published images are:
+For a tag such as `v1.0.1`, the published images are:
 
 | Image tag | Contents and use |
 | --- | --- |
-| `v1.0.0` | Runnable Item demo, built from the tagged source. |
-| `base-v1.0.0` | Shared runtime and configuration for downstream service binaries. |
+| `v1.0.1` | Runnable Item demo, built from the tagged source. |
+| `builder-v1.0.1` | Pinned Rust compiler, native build tools, cargo-chef, downloaded crates, and compiled template dependencies. |
+| `latest` | Runnable image from the most recently published tag build. |
+| `builder-latest` | Builder image from the most recently published tag build. |
 
 Commit and push the workflow and Dockerfile changes before creating a release
-tag. Use Docker-compatible release tag names such as `v1.0.0`:
+tag. Use a new Docker-compatible release tag name for each release:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+git tag v1.0.1
+git push origin v1.0.1
 ```
+
+The versioned builder tag is always `builder-<tag>` and the runnable tag is
+`<tag>`. The two mutable aliases update on tag builds. New builds do not publish
+`base-*` tags. After publishing the runnable image, the workflow removes existing
+package versions tagged only with `base-*` names; versions with any other tag
+are preserved. This uses the publishing repository's package admin access through
+`GITHUB_TOKEN`; see [GitHub package deletion permissions](https://docs.github.com/en/packages/learn-github-packages/deleting-and-restoring-a-package#required-permissions-to-delete-or-restore-a-package).
+Existing release tags do not automatically gain builder images when this
+workflow changes.
 
 For anonymous pulls, make the GHCR package public after its first publication.
 For private packages, authenticate pulls and grant consuming repositories access
 to the package. See [GHCR access and visibility](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
-After compiling a downstream service for Linux, its Dockerfile can be:
+To compile a downstream service using the published dependencies, its Dockerfile
+can be:
 
 ```dockerfile
-FROM ghcr.io/<owner>/<repository>:base-v1.0.0
-COPY --chown=65532:65532 --chmod=755 target/release/my-service /app/app
+FROM ghcr.io/<owner>/<repository>:builder-v1.0.1 AS build
+WORKDIR /build
+COPY . .
+RUN cargo build --locked --release --package app --bin app \
+    && install -Dm755 target/release/app /out/app
+
+FROM ghcr.io/<owner>/<repository>:v1.0.1 AS runtime
+ENV HQL_LOG_SYNC=immediate
+COPY --from=build --chown=65532:65532 /out/app /app/app
 EXPOSE 8080/tcp
 ```
 
-Replace the owner, repository, version, and binary name with the intended values.
-The base supplies `WORKDIR`, `USER`, HiQLite defaults, `VOLUME`, `STOPSIGNAL`, and
-`ENTRYPOINT`; copying the binary to `/app/app` is enough to select what runs.
+Replace the owner, repository, version, package, and binary name with the intended
+values. Use `builder-latest` and `latest` together to consume the latest tag build, or pin
+versioned tags for repeatable builds. Exclude host `target/` directories,
+credentials, local env files, and database state from the downstream build
+context as this template's `.dockerignore` does.
+The runnable image supplies `WORKDIR`, `USER`, HiQLite defaults, `VOLUME`,
+`STOPSIGNAL`, and `ENTRYPOINT`; copying the binary to `/app/app` replaces the
+template binary with the downstream service.
 Configure the binary to listen on `0.0.0.0:8080` and publish it with
 `--publish 8080:8080`. For hosts retaining this template's configuration, set
 `APP_ADDR=0.0.0.0:8080`. `EXPOSE` does not change the application's listen port.
@@ -482,3 +515,33 @@ Debian 13's glibc. Building with `rust:1-slim-trixie` matches this runtime. Any
 additional dynamically linked libraries required by a service must also be
 provided in its runtime image. HiQLite code and migrations remain embedded in
 the service binary.
+
+### Dependency reuse and build timing
+
+The builder and consumer must use the same pinned Rust toolchain, native Linux
+architecture, `/build` working directory, and release profile. The builder
+inherits `CARGO_INCREMENTAL=0`, `CARGO_PROFILE_RELEASE_DEBUG=0`, and
+`CARGO_PROFILE_RELEASE_STRIP=symbols`; keep them in the consumer. Use the same
+Cargo feature selections and compiler flags, including `RUSTFLAGS` and any
+`.cargo/config.toml` settings. The template uses the native target without an
+explicit `--target` and adds no `RUSTFLAGS`. Changing these settings invalidates
+affected artifacts. Matching dependencies can be reused; new versions, new
+dependencies, changed features, and workspace source still compile normally.
+See the [cargo-chef cache limitations](https://github.com/LukeMathWalker/cargo-chef#benefits-vs-limitations).
+
+Measure the same service source and build settings using two fresh, isolated
+BuildKit builders: one Dockerfile starting from the compiler image and building
+all dependencies, and one using `builder-<tag>` as above. Time the entire
+`docker buildx build --progress=plain` invocation, starting before pulling base
+images and ending after exporting the runtime image. Do not pre-pull the builder
+or import external caches for the fresh comparison. Record the builder image's
+compressed size and the layer download/extraction time in the plain build log.
+
+Then change one application `.rs` file in a temporary copy of the service and
+rebuild with each respective BuildKit builder. Preserve the first build's cache
+and use `cargo build --locked --release --package app --bin app -v` in the timed
+Dockerfiles to verify that unchanged registry dependencies are reported as
+`Fresh` while the application recompiles. Record all four wall times and the
+CPU architecture, job count, Rust version, image digests, and network conditions.
+The download cost is part of the fresh builder measurement; a faster Cargo step
+alone does not establish a faster fresh service build.
