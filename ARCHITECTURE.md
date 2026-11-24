@@ -545,3 +545,26 @@ Dockerfiles to verify that unchanged registry dependencies are reported as
 CPU architecture, job count, Rust version, image digests, and network conditions.
 The download cost is part of the fresh builder measurement; a faster Cargo step
 alone does not establish a faster fresh service build.
+
+One local comparison on 2026-11-24 used Linux amd64, an Intel i5-12400F (12 logical
+CPUs), 62 GiB RAM, four Cargo jobs, BuildKit 0.35.1, and the pinned
+`rustc 1.102.0-nightly (9c5648833 2026-11-10)`. Separate empty BuildKit builders
+included base-image downloads and OCI export in the fresh timings. An arm64
+emulation build ran in the background. The builder was downloaded from a
+localhost registry, so these results do not measure GHCR network latency.
+
+| Build | Compiler-only image | Compiled-dependency builder |
+| --- | ---: | ---: |
+| Fresh service | 426.4 s | 226.5 s |
+| After one application source edit | 81.4 s | 88.1 s |
+
+The fresh builder case was 1.88 times faster in this run. Its compressed layers
+totaled 968.3 MB (3.85 GB unpacked); the builder download/extraction stage took
+71.0 s, overlapping other stages and included in the total above. All 294
+registry dependency names were `Fresh` in both builder cases. The five workspace
+crates compiled again; the compiler-only warm build recompiled only `app`.
+The source edit added one blank line to `src/main.rs` in a temporary copy.
+
+The comparison used the Rust source and lockfile from `7b3dee2`, unchanged by
+the builder implementation in `fc683ac`, and local builder image digest
+`sha256:1992857c6d628eff6b08f0e803fdc02ff4b8ab56f5e2f9be38dd79a5c8fc3cdf`.
