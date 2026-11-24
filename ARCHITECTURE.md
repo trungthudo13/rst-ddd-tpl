@@ -552,25 +552,36 @@ CPU architecture, job count, Rust version, image digests, and network conditions
 The download cost is part of the fresh builder measurement; a faster Cargo step
 alone does not establish a faster fresh service build.
 
-One local comparison on 2026-11-24 used Linux amd64, an Intel i5-12400F (12 logical
-CPUs), 62 GiB RAM, four Cargo jobs, BuildKit 0.35.1, and the pinned
+The 2026-11-24 comparison used Linux amd64, an Intel i5-12400F (12 logical CPUs),
+62 GiB RAM, four Cargo jobs, BuildKit 0.35.1, and the pinned
 `rustc 1.102.0-nightly (9c5648833 2026-11-10)`. Separate empty BuildKit builders
-included base-image downloads and OCI export in the fresh timings. An arm64
-emulation build ran in the background. The builder was downloaded from a
-localhost registry, so these results do not measure GHCR network latency.
+included all image downloads, extraction, and OCI export in the fresh timings.
+The compiled-dependency builder was pulled from GHCR. No background ARM64
+emulation build ran during these measurements.
 
 | Build | Compiler-only image | Compiled-dependency builder |
 | --- | ---: | ---: |
-| Fresh service | 426.4 s | 226.5 s |
-| After one application source edit | 81.4 s | 88.1 s |
+| Fresh service | 389.2 s | 258.1 s |
+| After one application source edit | 55.6 s | 65.8 s |
 
-The fresh builder case was 1.88 times faster in this run. Its compressed layers
-totaled 968.3 MB (3.85 GB unpacked); the builder download/extraction stage took
-71.0 s, overlapping other stages and included in the total above. All 294
-registry dependency names were `Fresh` in both builder cases. The five workspace
-crates compiled again; the compiler-only warm build recompiled only `app`.
-The source edit added one blank line to `src/main.rs` in a temporary copy.
+The fresh builder case was 34% faster in this single comparison. Its compressed
+amd64 layers totaled 968.3 MB; the builder download/extraction stage took 88.9 s,
+overlapping other stages and included in the total above. All 294 registry
+dependency names were `Fresh` in both builder cases. Source-edit rebuilds took
+10.2 s longer with the builder: its five workspace crates compiled again, while
+the compiler-only warm build recompiled only `app`. The edit added one blank
+line to `src/main.rs` in separate temporary copies with matching source hashes.
 
-The comparison used the Rust source and lockfile from `7b3dee2`, unchanged by
-the builder implementation in `fc683ac`, and local builder image digest
-`sha256:1992857c6d628eff6b08f0e803fdc02ff4b8ab56f5e2f9be38dd79a5c8fc3cdf`.
+Both cases used source revision `bd74a1d` and the same Rust base digest
+`sha256:3b199fd6db7d709274df56565b8f4003f9e30d7bfcff9d53148c86053b7855e2`.
+The builder was pinned to
+`sha256:ea3951c303edc8a629e8e1d7c5f2c4aacf741fb353a88c204db7bc25f8dd2e19`.
+Both timed Dockerfiles retained the same `v0.1.0` runtime image to hold packaging
+constant; the published `v1.0.1` runtimes were checked separately.
+
+The [native v1.0.1 publication](https://github.com/trungthudo13/rst-ddd-tpl/actions/runs/45412614743)
+completed in 9 minutes 3 seconds. Its builder and runtime tags include amd64 and
+arm64, and each latest alias matches its versioned image. The original runnable
+`v0.1.0` digest is unchanged; `base-*` tags were removed. Both published runtimes
+passed health and Item CRUD smoke checks. ARM64 runtime execution used local
+QEMU for that smoke check; all release compilation ran on native CI runners.
